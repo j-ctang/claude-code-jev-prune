@@ -1,256 +1,173 @@
-# Getting Started with claude-code-jev-prune
+# Getting Started
 
-## Quick Start (5 minutes)
+This guide starts the local proxy, verifies its health, and points Claude Code at it.
 
-### 1. Get a Jev API Key
+## 1. Prerequisites
 
-Visit [TypeSafe AI](https://typesafe.ai) and get an API key. It's free to start.
+Confirm Node.js 20 or newer is installed:
 
-### 2. Clone & Install
+```bash
+node --version
+```
+
+Obtain a TypeSafe API key for live pruning. You can run and health-check the proxy without a key by setting `JEV_PRUNE_ENABLED=false`.
+
+## 2. Install
 
 ```bash
 git clone https://github.com/j-ctang/claude-code-jev-prune
 cd claude-code-jev-prune
 npm install
-```
-
-### 3. Configure
-
-```bash
-# Copy example env file
 cp .env.example .env
-
-# Edit with your Jev API key
-nano .env
-# Or on macOS:
-# open .env
 ```
 
-Your `.env` should look like:
-```
-TYPESAFE_API_KEY=sk-typesafe-abc123def456
+Edit `.env`:
+
+```dotenv
+TYPESAFE_API_KEY=tsf_replace_with_your_key
+TYPESAFE_BASE_URL=https://api.typesafe.ai
+JEV_MODEL=jev-latest
 JEV_PRUNE_ENABLED=true
+JEV_PRUNE_THRESHOLD=100000
+JEV_PRUNE_TRIGGER_TOKENS=150000
+JEV_PRUNE_KEEP_RECENT=5
+JEV_PRUNE_EXCLUDE_TOOLS=
+JEV_TIMEOUT_MS=2000
+JEV_PRUNE_DEBUG=false
+ANTHROPIC_UPSTREAM_URL=https://api.anthropic.com
 PORT=5590
 ```
 
-### 4. Build & Run
+Do not put Anthropic credentials in this file solely for the proxy. It forwards the authentication headers Claude Code sends.
+
+## 3. Verify the Repository
 
 ```bash
-# Build TypeScript
-npm run build
+npm run check
+```
 
-# Start the proxy
+This runs linting, the complete Jest suite, and the strict TypeScript build. Default tests use local fakes and do not call Anthropic or TypeSafe.
+
+## 4. Start the Proxy
+
+```bash
 npm start
 ```
 
-You should see:
-```
-[info]: jev-prune proxy listening on port 5590
-[info]: Claude Code: export ANTHROPIC_BASE_URL=http://localhost:5590
-[info]: Jev pruning: enabled
+Expected console event:
+
+```text
+info: proxy_listening {"port":5590,"pruningEnabled":true}
 ```
 
-### 5. Point Claude Code to the Proxy
-
-In a **separate terminal**:
+For a pass-through-only smoke test without a TypeSafe key:
 
 ```bash
-export ANTHROPIC_BASE_URL=http://localhost:5590
-export ANTHROPIC_API_KEY=your-existing-anthropic-key  # unchanged
-
-# Now use Claude Code normally
-claude --help
+JEV_PRUNE_ENABLED=false npm start
 ```
 
-**That's it!** Every Claude Code request now goes through intelligent context pruning.
+## 5. Check Health
 
----
-
-## What's Happening?
-
-1. Claude Code sends requests to `http://localhost:5590` instead of Anthropic directly
-2. The proxy intercepts the request
-3. When tokens exceed 100K (configurable), it asks Jev: "Which old tool results are still useful?"
-4. Jev evaluates each one (~300ms total)
-5. The proxy deletes irrelevant results (keeping everything else verbatim)
-6. Cleaned request goes to Anthropic API
-7. Response flows back to Claude Code unchanged
-
----
-
-## Verify It's Working
-
-### Check Health
+In another terminal:
 
 ```bash
-curl http://localhost:5590/health | jq
+curl --fail --silent http://127.0.0.1:5590/health
 ```
 
-Response:
-```json
-{
-  "status": "ok",
-  "proxy_version": "1.0.0",
-  "jev_connected": true,
-  "pruning_enabled": true,
-  "cache_size": 0,
-  "uptime_seconds": 42
-}
-```
+The response should contain `"status":"ok"`. The field `jev_configured` reports whether a TypeSafe key was loaded; it does not make a network request to TypeSafe.
 
-### Watch Pruning Happen
+## 6. Point Claude Code at the Proxy
+
+In the terminal where you will run Claude Code:
 
 ```bash
-# In a terminal, watch the log file
-tail -f ~/.claude/jev-prune.log
-
-# Then run a long Claude Code session in another terminal
+export ANTHROPIC_BASE_URL=http://127.0.0.1:5590
 claude
 ```
 
-You should see entries like:
-```
-[2026-09-22T14:32:15Z] [info]: Context pruned
-{
-  "before": 152000,
-  "after": 118000,
-  "reduction": "22%",
-  "messagesKept": 47
-}
+These two settings serve different processes:
+
+```text
+Claude Code: ANTHROPIC_BASE_URL=http://127.0.0.1:5590
+Proxy:       ANTHROPIC_UPSTREAM_URL=https://api.anthropic.com
 ```
 
----
+The distinct names prevent a forwarding loop.
 
-## Configuration Guide
+## 7. Observe Pruning
 
-### Token Thresholds
-
-Default behavior:
-- **100K tokens**: Start evaluating for pruning
-- **150K tokens**: Force prune immediately (can't grow beyond this)
-
-Adjust for your needs:
+The default threshold is intentionally high. For a synthetic local check, lower it temporarily and avoid real repository or conversation content:
 
 ```bash
-# Prune earlier (save more tokens, costs more Jev API calls)
-JEV_PRUNE_THRESHOLD=50000
-
-# Prune more aggressively (keep fewer old messages)
-JEV_PRUNE_TRIGGER_TOKENS=120000
-
-# Always keep last 10 messages (more context, fewer tokens saved)
-JEV_PRUNE_KEEP_RECENT=10
-```
-
-### Disable Pruning for Specific Tools
-
-Some tool results are always useful (like test output). Never prune them:
-
-```bash
-JEV_PRUNE_EXCLUDE_TOOLS=test,package_manager,debug
-```
-
-### Enable Debug Mode
-
-See every decision Jev makes:
-
-```bash
-JEV_PRUNE_DEBUG=true
+JEV_PRUNE_THRESHOLD=1 \
+JEV_PRUNE_TRIGGER_TOKENS=1000000 \
+JEV_PRUNE_KEEP_RECENT=0 \
+JEV_PRUNE_DEBUG=true \
 npm start
 ```
 
----
+Watch safe logs:
 
-## Advanced: Custom CLAUDE.md Rules
-
-Add to your project's `CLAUDE.md` to guide pruning:
-
-```markdown
-# Pruning Strategy
-
-When compacting conversation history:
-- Always preserve: Error resolution discussions, test failures and fixes
-- Prune aggressively: File listings (ls), grep results without context
-- Custom: Focus on keeping implementation details, architecture decisions
-
-This is a hint, not a requirement—Jev makes final decisions.
+```bash
+tail -f ~/.claude/jev-prune.log
 ```
 
----
+Debug entries include tool name, tool-use ID, numeric relevance, cutoff, and keep/drop outcome. They do not include tool inputs or results.
+
+## How a Request Is Handled
+
+1. The proxy estimates the request size.
+2. Requests below the threshold are forwarded unchanged.
+3. The proxy finds unique, matched `tool_use`/`tool_result` pairs.
+4. Recent and excluded tool pairs are removed from consideration.
+5. Remaining candidates are sent to TypeSafe in batches of at most 32.
+6. Pairs below the active relevance cutoff are removed together.
+7. The request is forwarded to Anthropic.
+8. Anthropic's status, headers, body, or event stream is relayed to Claude Code.
+
+If TypeSafe fails at any point, step 6 is skipped and the original request is forwarded.
 
 ## Troubleshooting
 
-### "TYPESAFE_API_KEY not set"
+### `TYPESAFE_API_KEY is required when pruning is enabled`
+
+Add the key to `.env`, or start in pass-through mode:
 
 ```bash
-export TYPESAFE_API_KEY=sk-typesafe-xxx
-npm start
+JEV_PRUNE_ENABLED=false npm start
 ```
 
-### Claude Code not using proxy
+### Claude Code reports connection refused
 
-Verify you set `ANTHROPIC_BASE_URL`:
+Confirm the proxy is running and the client-side URL is correct:
+
 ```bash
-echo $ANTHROPIC_BASE_URL
-# Should print: http://localhost:5590
+curl --fail http://127.0.0.1:5590/health
+echo "$ANTHROPIC_BASE_URL"
 ```
 
-If not set, do it again:
+### Requests loop or repeatedly hit the local proxy
+
+Check the proxy's upstream setting:
+
 ```bash
-export ANTHROPIC_BASE_URL=http://localhost:5590
+echo "$ANTHROPIC_UPSTREAM_URL"
 ```
 
-### Proxy starts but Claude Code uses direct API
+It should normally be empty, which uses the default, or `https://api.anthropic.com`. It must not be the proxy's own local URL.
 
-The `export` might not have persisted. Check:
-```bash
-# In the same terminal where you run claude:
-env | grep ANTHROPIC
-```
+### No pruning occurs
 
-If you don't see it, re-export:
-```bash
-export ANTHROPIC_BASE_URL=http://localhost:5590
-export ANTHROPIC_API_KEY=your-key
-claude
-```
+Check the health response, threshold, recent-pair count, and excluded-tool list. A short conversation may be below the threshold, and a conversation containing only recent or unmatched tool calls has no eligible candidates.
 
-### Context still getting summarized
+### Claude Code still compacts context
 
-Jev pruning removes context, but Claude Code's built-in `/compact` still works. You'll see two types:
-- **Jev pruning** (automatic): Removes irrelevant tool calls
-- **Claude Code /compact** (manual): Summarizes if you hit the hard limit
+This proxy does not disable Claude Code's built-in compaction. Pruning reduces eligible tool context before the request reaches Anthropic; native compaction remains a separate behavior.
 
-This is fine—they complement each other.
+### TypeSafe is unavailable
 
-### High latency or slow responses
+The proxy records a `prune_fail_open` event and forwards the original request. Check connectivity and the TypeSafe key without placing either key or payload content in an issue report.
 
-Jev evaluation takes ~300ms per pruning decision. If you see slowness:
+## More Detail
 
-1. Disable pruning temporarily:
-   ```bash
-   JEV_PRUNE_ENABLED=false npm start
-   ```
-
-2. Increase the threshold so pruning happens less often:
-   ```bash
-   JEV_PRUNE_THRESHOLD=150000  # Don't prune until 150K tokens
-   ```
-
-3. Check Jev API status at https://status.typesafe.ai
-
----
-
-## Next Steps
-
-- Read [ARCHITECTURE.md](./ARCHITECTURE.md) to understand how it works
-- Check [examples/](./examples/) for sample workflows
-- Join the community at https://github.com/j-ctang/claude-code-jev-prune/discussions
-
----
-
-## Need Help?
-
-- 🐛 Found a bug? [Open an issue](https://github.com/j-ctang/claude-code-jev-prune/issues)
-- 💬 Have a question? [Start a discussion](https://github.com/j-ctang/claude-code-jev-prune/discussions)
-- 📖 Want to contribute? See [CONTRIBUTING.md](./CONTRIBUTING.md)
+Read [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, cutoffs, transport behavior, and failure handling.

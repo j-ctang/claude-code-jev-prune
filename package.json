@@ -1,7 +1,7 @@
 {
   "name": "claude-code-jev-prune",
   "version": "1.0.0",
-  "description": "MCP plugin for Claude Code: intelligent context pruning with TypeSafe Jev",
+  "description": "Local Claude Code HTTP proxy for pair-safe context pruning with TypeSafe Jev",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -17,7 +17,7 @@
   },
   "keywords": [
     "claude-code",
-    "mcp",
+    "http-proxy",
     "jev",
     "context-pruning",
     "tokens",

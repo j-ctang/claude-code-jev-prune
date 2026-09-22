@@ -1,275 +1,155 @@
 # claude-code-jev-prune
 
-**Keep your Claude Code context clean. Remove stale context without summarizing. Save 40-60% tokens.**
+A local HTTP proxy that removes stale Claude tool-call context without summarizing retained messages.
 
-An MCP plugin that uses TypeSafe Jev to intelligently prune Claude Code's conversation history. Instead of summarizing old context (which loses detail and introduces hallucinations), it uses Jev to identify irrelevant context and **deletes it while keeping everything else verbatim**.
+Claude Code sends Anthropic Messages API requests to this proxy. Once a request reaches a configurable estimated-token threshold, the proxy asks TypeSafe Jev whether older, matched tool calls are still relevant to the latest user goal. Low-relevance `tool_use` and `tool_result` blocks are removed as pairs, and the cleaned request is forwarded to Anthropic.
 
-## What It Does
+## Status
 
-When Claude Code approaches its context limit, instead of the default lossy summarization, `claude-code-jev-prune`:
+The proxy, pruning engine, TypeSafe client, health endpoint, logging, streaming transport, and automated tests are implemented. The default test suite uses local fakes and does not require API keys. A live Jev validation with a user-supplied key remains an explicit pre-release step.
 
-1. **Analyzes context**: Sends conversation history + current task to Jev
-2. **Decides relevance**: Jev asks "Is this tool call still needed?" for each older exchange
-3. **Deletes, doesn't summarize**: Removes irrelevant context entirely, keeps everything else **byte-for-byte original**
-4. **Continues working**: Claude Code proceeds with clean, compressed context
+This project is an HTTP proxy, not an MCP server or MCP plugin.
 
-## Key Differences from Standard Compaction
+## Safety Properties
 
-| Feature | Standard /compact | jev-prune |
-|---------|------------------|-----------|
-| Method | LLM summarization | Jev relevance scoring |
-| Quality | Lossy (summaries) | Lossless (deletion only) |
-| Multiple compactions | ❌ Degrades (summary of summary) | ✅ Safe (never rewrites) |
-| Token savings | 50-70% | 40-60% |
-| Speed | Slow (API call per turn) | Fast (~300ms per decision) |
-| Cost | Expensive | Cheap ($0.042/M tokens) |
-| Original messages | Modified | Preserved 100% |
+- Only uniquely matched assistant `tool_use` and user `tool_result` blocks are eligible for removal.
+- Both halves of an eligible tool pair are removed together.
+- System content, ordinary user/assistant text, unmatched tools, duplicate IDs, malformed blocks, recent tools, and excluded tools are preserved.
+- Retained JSON values are not rewritten or summarized. JSON whitespace and object-key ordering may change when the request is serialized.
+- TypeSafe timeouts, HTTP errors, malformed answers, and missing scores fail open: Anthropic receives the original request.
+- Anthropic response statuses and server-sent event streams are relayed to Claude Code.
+
+## Requirements
+
+- Node.js 20 or newer
+- A TypeSafe API key when pruning is enabled
+- Whatever Anthropic authentication Claude Code normally sends
 
 ## Installation
 
-### Via MCP Registry (Coming Soon)
-
 ```bash
-claude install jev-prune
-```
-
-### Manual Setup
-
-```bash
-# Clone the repo
 git clone https://github.com/j-ctang/claude-code-jev-prune
 cd claude-code-jev-prune
-
-# Install dependencies
 npm install
+cp .env.example .env
+```
 
-# Set your Jev API key
-export TYPESAFE_API_KEY="your-jev-key-here"
+Edit `.env` and set your TypeSafe key:
 
-# Start the proxy
+```dotenv
+TYPESAFE_API_KEY=tsf_replace_with_your_key
+JEV_PRUNE_ENABLED=true
+PORT=5590
+```
+
+Build and start the proxy:
+
+```bash
+npm run build
 npm start
 ```
 
-Then configure Claude Code:
+In a separate terminal, point Claude Code at the local proxy:
 
 ```bash
-export ANTHROPIC_BASE_URL=http://localhost:5590
-export ANTHROPIC_API_KEY=your-existing-key  # unchanged
+export ANTHROPIC_BASE_URL=http://127.0.0.1:5590
 claude
 ```
 
+The proxy forwards requests to `https://api.anthropic.com` by default. Its upstream setting is deliberately named `ANTHROPIC_UPSTREAM_URL`, so it cannot be confused with the `ANTHROPIC_BASE_URL` that Claude Code uses to reach the proxy.
+
+See [GETTING_STARTED.md](./GETTING_STARTED.md) for a verification walkthrough and [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for implementation details.
+
 ## Configuration
 
-### Environment Variables
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `TYPESAFE_API_KEY` | none | Required when pruning is enabled. Sent only to TypeSafe. |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe API origin. |
+| `JEV_MODEL` | `jev-latest` | Model name sent to `/v1/systemone`. |
+| `JEV_PRUNE_ENABLED` | `true` | Enables relevance scoring and pruning. |
+| `JEV_PRUNE_THRESHOLD` | `100000` | Estimated tokens at which normal pruning begins. |
+| `JEV_PRUNE_TRIGGER_TOKENS` | `150000` | Estimated tokens at which the aggressive cutoff is used. |
+| `JEV_PRUNE_KEEP_RECENT` | `5` | Number of newest matched tool pairs never evaluated or removed. |
+| `JEV_PRUNE_EXCLUDE_TOOLS` | empty | Comma-separated tool names never evaluated or removed. |
+| `JEV_TIMEOUT_MS` | `2000` | Timeout for each TypeSafe batch. |
+| `JEV_PRUNE_DEBUG` | `false` | Logs safe per-decision metadata: tool name/ID, score, cutoff, and outcome. |
+| `ANTHROPIC_UPSTREAM_URL` | `https://api.anthropic.com` | Anthropic-compatible upstream used by the proxy. |
+| `PORT` | `5590` | Local listening port. |
+
+All integer and boolean values are validated at startup. The aggressive threshold must be greater than or equal to the normal threshold.
+
+## Decision Policy
+
+The proxy estimates tokens as `ceil(JSON.stringify(request).length / 4)`. This is a deterministic trigger heuristic, not Anthropic's billing-token count.
+
+- Below `JEV_PRUNE_THRESHOLD`: forward unchanged without contacting TypeSafe.
+- At or above `JEV_PRUNE_THRESHOLD`: drop eligible pairs with relevance below `0.50`.
+- At or above `JEV_PRUNE_TRIGGER_TOKENS`: drop eligible pairs with relevance below `0.70`.
+
+The trigger is more aggressive, but it is not a guaranteed context-size ceiling. The proxy will not delete protected content merely to hit a target.
+
+Jev requests contain no more than 32 named `noul` questions per batch. Drop decisions are cached by tool-use ID; kept candidates are evaluated again because the task goal may change.
+
+## Privacy Boundary
+
+When pruning activates, the following data is sent to TypeSafe:
+
+- The latest non-tool user text used as the current goal
+- Each eligible tool name and tool-use ID
+- Each eligible tool input
+- Each eligible tool result
+
+The TypeSafe API key is never forwarded to Anthropic. Anthropic credentials and request headers are never sent to TypeSafe. Proxy logs do not contain authorization headers, full prompts, tool inputs, tool results, or upstream response bodies.
+
+Review TypeSafe's privacy and retention terms before using pruning on sensitive conversations. Jev returns a constrained numeric answer, but that answer can still be wrong.
+
+## Health and Logs
 
 ```bash
-# Required
-TYPESAFE_API_KEY=sk-typesafe-...
-
-# Optional
-JEV_PRUNE_ENABLED=true              # Enable/disable pruning
-JEV_PRUNE_THRESHOLD=100000          # Tokens before pruning activates (default: 100K)
-JEV_PRUNE_TRIGGER_TOKENS=150000     # Hard limit before force-pruning (default: 150K)
-JEV_PRUNE_KEEP_RECENT=5             # Always keep last N tool calls (default: 5)
-JEV_PRUNE_EXCLUDE_TOOLS=grep,ls     # Don't prune these tool results (comma-separated)
-JEV_PRUNE_DEBUG=true                # Log pruning decisions
-ANTHROPIC_BASE_URL=http://localhost:5590
-PORT=5590                           # Proxy listen port
-```
-
-### CLAUDE.md Integration
-
-Add to your project's `CLAUDE.md` for custom pruning behavior:
-
-```markdown
-# Pruning Rules
-
-When compacting conversation history:
-- Always preserve: Error handling discussions, test results, final implementations
-- Can remove: Exploratory tool calls, duplicate queries, old file listings
-- Custom focus: Focus on keeping code changes and architecture decisions
-```
-
-## How It Works
-
-### Architecture
-
-```
-Claude Code Terminal
-        │
-        ├─ POST /v1/messages (Anthropic format)
-        │
-        ▼
-  jev-prune Proxy
-        │
-        ├─ Intercept messages
-        ├─ Calculate token count
-        ├─ If near limit:
-        │   ├─ Ask Jev: "Is this tool call still useful?"
-        │   ├─ Collect yes/no decisions (~300ms)
-        │   └─ Filter context (delete irrelevant items)
-        ├─ Forward cleaned messages
-        │
-        └─ Forward to Anthropic API
-        
-        ▼
-  Anthropic API
-        │
-        └─ Response back to Claude Code (unchanged)
-```
-
-### Decision Logic
-
-For each older tool call, Jev receives:
-```json
-{
-  "state": "Current task: Fix the login bug. Previous errors: CORS issue (fixed), database connection (fixed), now focusing on JWT validation",
-  "questions": [
-    {
-      "type": "boolean",
-      "question": "Does the agent still need this file read result to complete the current task?"
-    },
-    {
-      "type": "boolean", 
-      "question": "Is this error message still relevant to the current goal?"
-    }
-  ]
-}
-```
-
-Jev returns calibrated confidence scores. Low confidence items are dropped.
-
-### Caching
-
-Decisions are memoized per `tool_call_id` to keep prompt caching friendly:
-- ✅ Evictions are permanent (won't be re-asked)
-- ✅ Keeps are re-asked if task goal changes
-- ✅ Fail-open: If Jev times out, request passes through unchanged
-
-## Performance
-
-### Token Savings Example
-
-**Before** (200K context window):
-- Conversation history: 45K tokens
-- File contents: 78K tokens  
-- Tool outputs: 52K tokens (many stale)
-- System prompt: 25K tokens
-- **Total: 200K (at limit, 95% full)**
-
-**After jev-prune**:
-- Conversation history: 35K tokens (kept all)
-- File contents: 78K tokens (kept all)
-- Tool outputs: 18K tokens (removed stale)
-- System prompt: 25K tokens
-- **Total: 156K (21% reduction, room for more work)**
-
-### Cost Comparison
-
-Processing 1 long Claude Code session (500K accumulated tokens):
-
-| Method | Cost | Token Savings |
-|--------|------|---------------|
-| Standard /compact | $2.50 (5 LLM calls) | 70% |
-| jev-prune | $0.02 (Jev calls) | 60% |
-| **Savings** | **99% cheaper** | Similar results |
-
-## Use Cases
-
-✅ Long-running coding sessions (>100K tokens)  
-✅ Multi-file refactors with many iterations  
-✅ Debugging sessions with repeated test cycles  
-✅ Projects with large codebases (need file context)  
-✅ Teams working on same codebase (keep all changes)  
-
-❌ Short sessions (<50K tokens) - not needed  
-❌ One-shot tasks - overhead not worth it  
-
-## Monitoring & Debugging
-
-### View Pruning Decisions
-
-```bash
+curl --fail --silent http://127.0.0.1:5590/health
 tail -f ~/.claude/jev-prune.log
 ```
 
-Output shows every decision:
-```
-[2026-09-22T14:32:15] Pruning triggered at 152K tokens
-[2026-09-22T14:32:15] Evaluating 12 older tool calls
-[2026-09-22T14:32:15] ✓ Kept file edit: src/auth.ts (confidence: 0.95)
-[2026-09-22T14:32:15] ✗ Dropped: grep output from 10 minutes ago (confidence: 0.08)
-[2026-09-22T14:32:15] Result: 152K → 118K tokens (22% reduction)
-```
-
-### Health Check
-
-```bash
-curl http://localhost:5590/health
-```
+Example health response:
 
 ```json
 {
   "status": "ok",
   "proxy_version": "1.0.0",
-  "jev_connected": true,
-  "tokens_processed": 1234567,
-  "pruning_decisions": 89,
-  "uptime_seconds": 3600
+  "jev_configured": true,
+  "pruning_enabled": true,
+  "requests": 3,
+  "pruning_decisions": 8,
+  "dropped_pairs": 2,
+  "fail_open_events": 0,
+  "uptime_seconds": 42
 }
 ```
 
-## Troubleshooting
+`jev_configured` means a key is present. Health checks do not call TypeSafe, spend API credits, or claim that the external service is reachable.
 
-### Jev API key not found
+## Development
+
+```bash
+npm run dev
+npm test
+npm run lint
+npm run build
+npm run check
 ```
-Error: TYPESAFE_API_KEY environment variable not set
-```
-**Fix**: `export TYPESAFE_API_KEY="your-key-here"`
 
-### Proxy not intercepting Claude Code
-```
-Error: Connection refused on localhost:5590
-```
-**Fix**: Ensure `ANTHROPIC_BASE_URL=http://localhost:5590` is set before running `claude`
+Tests cover configuration, token estimation, the TypeSafe wire contract, pair-safe pruning, caching, fail-open behavior, upstream forwarding, error relay, server-sent events, file logging, startup, and graceful shutdown.
 
-### Context still getting summarized
-```
-Warning: Pruning disabled, falling back to default compaction
-```
-**Fix**: Set `JEV_PRUNE_ENABLED=true` and ensure Jev API key is valid
+## Limitations
 
-### Performance degradation
-If sessions feel slower after enabling pruning:
-- Increase `JEV_PRUNE_THRESHOLD` to avoid frequent pruning
-- Reduce `JEV_PRUNE_KEEP_RECENT` to be more aggressive
-- Add frequently-needed tools to `JEV_PRUNE_EXCLUDE_TOOLS`
-
-## Contributing
-
-Contributions welcome! Areas to improve:
-
-- [ ] Jev question schema optimization
-- [ ] Parallel Jev evaluation for multiple contexts
-- [ ] Better heuristics for "relevant" context
-- [ ] Integration with Claude Code plugins API
-- [ ] Dashboard for visualizing pruning decisions
-- [ ] Benchmarks across different project types
+- Token counts are estimates.
+- Relevance pruning can discard context that later becomes useful.
+- Request JSON is parsed and reserialized, so byte-identical HTTP payloads are not promised.
+- Drop caching is process-local and resets when the proxy restarts.
+- Built-in Claude Code compaction remains independent and may still run.
+- Published savings, latency, and quality numbers require workload-specific benchmarks and are not asserted by this repository.
 
 ## License
 
 MIT
-
-## Disclaimer
-
-This project uses TypeSafe Jev API which requires an API key and incurs costs. Each context pruning decision costs ~$0.00001. Standard Claude Code API costs remain unchanged—this proxy is transparent to billing.
-
-Pruning decisions are made locally; conversation history is sent to TypeSafe Jev API as part of the decision process. Review TypeSafe's privacy policy if this is a concern.
-
-## References
-
-- [TypeSafe Jev Docs](https://typesafe.ai/docs)
-- [jev-compactor](https://github.com/glama/jev-compactor)
-- [fast-jev-compaction](https://github.com/tamaratran/fast-jev-compaction)
-- [Claude Code Docs](https://code.claude.com/docs)
-- [Anthropic Messages API](https://platform.claude.com/docs/en/api/messages)
