@@ -1,15 +1,15 @@
 import "dotenv/config";
 import { createServer } from "node:http";
 import { createApp } from "./app.js";
-import { loadConfig } from "./config.js";
+import { loadConfig, type Config } from "./config.js";
 import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
 import { createLogger } from "./utils/logger.js";
 
-const logger = createLogger();
-
-function start(): void {
-  const config = loadConfig(process.env);
+function start(
+  config: Config,
+  logger: ReturnType<typeof createLogger>,
+): void {
   const scorer = new JevService({
     apiKey: config.jevApiKey ?? "disabled",
     baseUrl: config.jevBaseUrl,
@@ -59,12 +59,16 @@ function start(): void {
   process.on("SIGTERM", shutdown);
 }
 
+let logger: ReturnType<typeof createLogger> | undefined;
 try {
-  start();
+  const config = loadConfig(process.env);
+  logger = createLogger({ level: config.debug ? "debug" : "info" });
+  start(config, logger);
 } catch (error) {
-  logger.error("proxy_startup_failed", {
+  const failureLogger = logger ?? createLogger();
+  failureLogger.error("proxy_startup_failed", {
     error: error instanceof Error ? error.message : "unknown error",
   });
   process.exitCode = 1;
-  logger.end();
+  failureLogger.end();
 }

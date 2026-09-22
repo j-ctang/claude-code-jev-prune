@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import winston from "winston";
@@ -13,12 +13,16 @@ export interface AppLogger {
 interface LoggerOptions {
   logPath?: string;
   console?: boolean;
+  level?: "info" | "debug";
 }
 
 export function createLogger(options: LoggerOptions = {}): winston.Logger {
   const logPath =
     options.logPath ?? join(homedir(), ".claude", "jev-prune.log");
   mkdirSync(dirname(logPath), { recursive: true, mode: 0o700 });
+  const fileDescriptor = openSync(logPath, "a", 0o600);
+  closeSync(fileDescriptor);
+  chmodSync(logPath, 0o600);
 
   const transports: winston.transport[] = [
     new winston.transports.File({ filename: logPath }),
@@ -38,7 +42,7 @@ export function createLogger(options: LoggerOptions = {}): winston.Logger {
   }
 
   return winston.createLogger({
-    level: "info",
+    level: options.level ?? "info",
     format: winston.format.combine(
       winston.format.timestamp(),
       winston.format.json(),
