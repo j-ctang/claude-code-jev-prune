@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import type {
   AnthropicRequest,
@@ -15,6 +16,7 @@ interface ContextPrunerOptions {
   config: Config;
   scorer: RelevanceScorer;
   logger?: AppLogger;
+  maxCachedDrops?: number;
 }
 
 interface LocatedToolUse {
@@ -44,16 +46,31 @@ function isToolResult(block: ContentBlock): block is ToolResultBlock {
   );
 }
 
+function cacheKey(candidate: ToolCandidate): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        toolUseId: candidate.toolUseId,
+        toolName: candidate.toolName,
+        input: candidate.input,
+        result: candidate.result,
+      }),
+    )
+    .digest("base64url");
+}
+
 export class ContextPruner {
   private readonly config: Config;
   private readonly scorer: RelevanceScorer;
   private readonly logger: AppLogger | undefined;
-  private readonly dropCache = new Set<string>();
+  private readonly maxCachedDrops: number;
+  private readonly dropCache = new Map<string, true>();
 
   constructor(options: ContextPrunerOptions) {
     this.config = options.config;
     this.scorer = options.scorer;
     this.logger = options.logger;
+    this.maxCachedDrops = options.maxCachedDrops ?? 10_000;
   }
 
   async prune(request: AnthropicRequest): Promise<PruneResult> {
@@ -83,14 +100,15 @@ export class ContextPruner {
           !protectedIds.has(candidate.toolUseId) &&
           !this.config.excludeTools.has(candidate.toolName),
       );
-      const droppedIds = new Set(
-        eligibleByPolicy
-          .filter((candidate) => this.dropCache.has(candidate.toolUseId))
-          .map((candidate) => candidate.toolUseId),
-      );
-      const eligibleForScoring = eligibleByPolicy.filter(
-        (candidate) => !this.dropCache.has(candidate.toolUseId),
-      );
+      const droppedIds = new Set<string>();
+      const eligibleForScoring: ToolCandidate[] = [];
+      for (const candidate of eligibleByPolicy) {
+        if (this.touchCachedDrop(cacheKey(candidate))) {
+          droppedIds.add(candidate.toolUseId);
+        } else {
+          eligibleForScoring.push(candidate);
+        }
+      }
       const goal = this.latestUserGoal(request);
       const scores =
         eligibleForScoring.length === 0
@@ -104,7 +122,7 @@ export class ContextPruner {
         }
         return { candidate, score };
       });
-      const newlyDroppedIds: string[] = [];
+      const newlyDroppedCandidates: ToolCandidate[] = [];
 
       for (const { candidate, score } of scoredCandidates) {
         if (this.config.debug) {
@@ -117,12 +135,12 @@ export class ContextPruner {
           });
         }
         if (score < cutoff) {
-          newlyDroppedIds.push(candidate.toolUseId);
+          newlyDroppedCandidates.push(candidate);
         }
       }
-      for (const toolUseId of newlyDroppedIds) {
-        droppedIds.add(toolUseId);
-        this.dropCache.add(toolUseId);
+      for (const candidate of newlyDroppedCandidates) {
+        droppedIds.add(candidate.toolUseId);
+        this.cacheDrop(candidate);
       }
 
       if (droppedIds.size === 0) {
@@ -155,6 +173,25 @@ export class ContextPruner {
         dropped: 0,
         reason: "fail-open",
       };
+    }
+  }
+
+  private touchCachedDrop(key: string): boolean {
+    if (!this.dropCache.has(key)) return false;
+    this.dropCache.delete(key);
+    this.dropCache.set(key, true);
+    return true;
+  }
+
+  private cacheDrop(candidate: ToolCandidate): void {
+    if (this.maxCachedDrops <= 0) return;
+    const key = cacheKey(candidate);
+    this.dropCache.delete(key);
+    this.dropCache.set(key, true);
+    while (this.dropCache.size > this.maxCachedDrops) {
+      const oldestKey = this.dropCache.keys().next().value as string | undefined;
+      if (oldestKey === undefined) return;
+      this.dropCache.delete(oldestKey);
     }
   }
 

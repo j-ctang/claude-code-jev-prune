@@ -236,6 +236,126 @@ describe("ContextPruner", () => {
     ]);
   });
 
+  test("does not reuse a drop when the tool payload changes under the same ID", async () => {
+    let attempt = 0;
+    const batches: string[][] = [];
+    const scorer: RelevanceScorer = {
+      async score(_goal, candidates) {
+        attempt += 1;
+        batches.push(candidates.map((candidate) => candidate.toolUseId));
+        return new Map(
+          candidates.map((candidate) => [
+            candidate.toolUseId,
+            attempt === 1 && candidate.toolUseId === "call-old" ? 0.1 : 0.9,
+          ]),
+        );
+      },
+    };
+    const pruner = new ContextPruner({ config: config(), scorer });
+    const changedRequest = clone(twoToolRequest);
+    const oldUse = changedRequest.messages[1]?.content;
+    const oldResult = changedRequest.messages[2]?.content;
+    if (!Array.isArray(oldUse) || !Array.isArray(oldResult)) {
+      throw new Error("invalid fixture");
+    }
+    const useBlock = oldUse.find((block) => block.type === "tool_use");
+    const resultBlock = oldResult.find((block) => block.type === "tool_result");
+    if (!useBlock || !resultBlock) throw new Error("invalid fixture");
+    useBlock.input = { path: "different.log" };
+    resultBlock.content = "different output";
+
+    await pruner.prune(twoToolRequest);
+    const changed = await pruner.prune(changedRequest);
+
+    expect(allToolUseIds(changed.request)).toEqual(["call-old", "call-new"]);
+    expect(batches).toEqual([
+      ["call-old", "call-new"],
+      ["call-old", "call-new"],
+    ]);
+  });
+
+  test("evicts old drop fingerprints when the cache reaches its bound", async () => {
+    let attempt = 0;
+    const batches: string[][] = [];
+    const scorer: RelevanceScorer = {
+      async score(_goal, candidates) {
+        attempt += 1;
+        batches.push(candidates.map((candidate) => candidate.toolUseId));
+        return new Map(
+          candidates.map((candidate) => [
+            candidate.toolUseId,
+            attempt < 3 && candidate.toolUseId === "call-old" ? 0.1 : 0.9,
+          ]),
+        );
+      },
+    };
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer,
+      maxCachedDrops: 1,
+    });
+    const changedRequest = clone(twoToolRequest);
+    const oldUse = changedRequest.messages[1]?.content;
+    if (!Array.isArray(oldUse)) throw new Error("invalid fixture");
+    const useBlock = oldUse.find((block) => block.type === "tool_use");
+    if (!useBlock) throw new Error("invalid fixture");
+    useBlock.input = { path: "second-fingerprint.log" };
+
+    await pruner.prune(twoToolRequest);
+    await pruner.prune(changedRequest);
+    const revisited = await pruner.prune(twoToolRequest);
+
+    expect(allToolUseIds(revisited.request)).toEqual(["call-old", "call-new"]);
+    expect(batches).toEqual([
+      ["call-old", "call-new"],
+      ["call-old", "call-new"],
+      ["call-old", "call-new"],
+    ]);
+  });
+
+  test("keeps recently hit drop fingerprints when evicting", async () => {
+    const batches: string[][] = [];
+    const scorer: RelevanceScorer = {
+      async score(_goal, candidates) {
+        batches.push(candidates.map((candidate) => candidate.toolUseId));
+        return new Map(
+          candidates.map((candidate) => [
+            candidate.toolUseId,
+            candidate.toolUseId === "call-old" ? 0.1 : 0.9,
+          ]),
+        );
+      },
+    };
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer,
+      maxCachedDrops: 2,
+    });
+    const withOldInput = (path: string) => {
+      const request = clone(twoToolRequest);
+      const content = request.messages[1]?.content;
+      if (!Array.isArray(content)) throw new Error("invalid fixture");
+      const useBlock = content.find((block) => block.type === "tool_use");
+      if (!useBlock) throw new Error("invalid fixture");
+      useBlock.input = { path };
+      return request;
+    };
+
+    await pruner.prune(twoToolRequest);
+    await pruner.prune(withOldInput("b.log"));
+    await pruner.prune(twoToolRequest);
+    await pruner.prune(withOldInput("c.log"));
+    await pruner.prune(twoToolRequest);
+
+    expect(batches).toEqual([
+      ["call-old", "call-new"],
+      ["call-old", "call-new"],
+      ["call-new"],
+      ["call-old", "call-new"],
+      ["call-new"],
+    ]);
+  });
+
   test("removes messages made empty by pruning", async () => {
     const pruner = new ContextPruner({
       config: config(),
