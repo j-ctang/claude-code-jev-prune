@@ -97,12 +97,16 @@ export class ContextPruner {
           ? new Map<string, number>()
           : await this.scorer.score(goal, eligibleForScoring);
       const cutoff = beforeTokens >= this.config.triggerTokens ? 0.7 : 0.5;
-
-      for (const candidate of eligibleForScoring) {
+      const scoredCandidates = eligibleForScoring.map((candidate) => {
         const score = scores.get(candidate.toolUseId);
         if (score === undefined) {
           throw new Error(`Missing score for ${candidate.toolUseId}`);
         }
+        return { candidate, score };
+      });
+      const newlyDroppedIds: string[] = [];
+
+      for (const { candidate, score } of scoredCandidates) {
         if (this.config.debug) {
           this.logger?.debug("prune_decision", {
             toolName: candidate.toolName,
@@ -113,9 +117,12 @@ export class ContextPruner {
           });
         }
         if (score < cutoff) {
-          droppedIds.add(candidate.toolUseId);
-          this.dropCache.add(candidate.toolUseId);
+          newlyDroppedIds.push(candidate.toolUseId);
         }
+      }
+      for (const toolUseId of newlyDroppedIds) {
+        droppedIds.add(toolUseId);
+        this.dropCache.add(toolUseId);
       }
 
       if (droppedIds.size === 0) {

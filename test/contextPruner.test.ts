@@ -276,6 +276,31 @@ describe("ContextPruner", () => {
     expect(result.reason).toBe("fail-open");
   });
 
+  test("does not cache partial drops from a failed scoring attempt", async () => {
+    let attempt = 0;
+    const batches: string[][] = [];
+    const scorer: RelevanceScorer = {
+      async score(_goal, candidates) {
+        attempt += 1;
+        batches.push(candidates.map((candidate) => candidate.toolUseId));
+        if (attempt === 1) return new Map([["call-old", 0.1]]);
+        return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.9]));
+      },
+    };
+    const pruner = new ContextPruner({ config: config(), scorer });
+
+    const failed = await pruner.prune(twoToolRequest);
+    const recovered = await pruner.prune(twoToolRequest);
+
+    expect(failed.reason).toBe("fail-open");
+    expect(recovered.request).toBe(twoToolRequest);
+    expect(allToolUseIds(recovered.request)).toEqual(["call-old", "call-new"]);
+    expect(batches).toEqual([
+      ["call-old", "call-new"],
+      ["call-old", "call-new"],
+    ]);
+  });
+
   test("debug logging emits decision metadata without tool content", async () => {
     const events: Array<{
       message: string;
