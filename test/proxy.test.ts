@@ -1,6 +1,10 @@
 import { once } from "node:events";
+import { spawn } from "node:child_process";
+import { mkdtemp } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import request from "supertest";
 import type { Config } from "../src/config.js";
 import { createApp } from "../src/app.js";
@@ -311,3 +315,65 @@ describe("Anthropic proxy", () => {
     expect(upstream.requests).toHaveLength(0);
   });
 });
+
+test(
+  "starts from the built entry point and exits cleanly on SIGTERM",
+  async () => {
+    const reservation = createServer();
+    reservation.listen(0, "127.0.0.1");
+    await once(reservation, "listening");
+    const port = (reservation.address() as AddressInfo).port;
+    reservation.close();
+    await once(reservation, "close");
+    const temporaryHome = await mkdtemp(join(tmpdir(), "jev-prune-home-"));
+    const child = spawn(process.execPath, ["dist/index.js"], {
+      cwd: process.cwd(),
+      env: {
+        ...process.env,
+        HOME: temporaryHome,
+        PORT: String(port),
+        JEV_PRUNE_ENABLED: "false",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let output = "";
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      output += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      output += chunk;
+    });
+
+    try {
+      const deadline = Date.now() + 5_000;
+      while (!output.includes("proxy_listening") && Date.now() < deadline) {
+        if (child.exitCode !== null) {
+          throw new Error(`Proxy exited before startup: ${output}`);
+        }
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      expect(output).toContain("proxy_listening");
+
+      const health = await fetch(`http://127.0.0.1:${port}/health`);
+      expect(health.status).toBe(200);
+      expect(await health.json()).toEqual(
+        expect.objectContaining({
+          status: "ok",
+          pruning_enabled: false,
+        }),
+      );
+
+      child.kill("SIGTERM");
+      const [code, signal] = (await once(child, "exit")) as [
+        number | null,
+        NodeJS.Signals | null,
+      ];
+      expect({ code, signal }).toEqual({ code: 0, signal: null });
+    } finally {
+      if (child.exitCode === null) child.kill("SIGKILL");
+    }
+  },
+  10_000,
+);
