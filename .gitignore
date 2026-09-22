@@ -1,1 +1,7 @@
 .worktrees/
+node_modules/
+dist/
+.env
+coverage/
+*.log
+.DS_Store
