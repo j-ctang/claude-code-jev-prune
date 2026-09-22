@@ -58,7 +58,7 @@ claude
 
 The proxy forwards requests to `https://api.anthropic.com` by default. Its upstream setting is deliberately named `ANTHROPIC_UPSTREAM_URL`, so it cannot be confused with the `ANTHROPIC_BASE_URL` that Claude Code uses to reach the proxy.
 
-See [GETTING_STARTED.md](./GETTING_STARTED.md) for a verification walkthrough and [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for implementation details.
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failure handling, and transport details.
 
 ## Configuration
 
@@ -128,6 +128,27 @@ Example health response:
 ```
 
 `jev_configured` means a key is present. Health checks do not call TypeSafe, spend API credits, or claim that the external service is reachable.
+
+## Troubleshooting
+
+If startup reports that `TYPESAFE_API_KEY` is required, add the key to `.env` or run in pass-through mode:
+
+```bash
+JEV_PRUNE_ENABLED=false npm start
+```
+
+If Claude Code reports connection refused, verify the proxy and client-side URL:
+
+```bash
+curl --fail http://127.0.0.1:5590/health
+echo "$ANTHROPIC_BASE_URL"
+```
+
+If requests loop back to the proxy, check `ANTHROPIC_UPSTREAM_URL`. It should normally be unset or `https://api.anthropic.com`; it must not be the local proxy URL.
+
+If no pruning occurs, check the health response, thresholds, recent-pair count, and excluded-tool list. Short conversations and conversations containing only protected or unmatched tools have no eligible candidates.
+
+Claude Code's built-in compaction remains separate and may still run after proxy pruning. If TypeSafe is unavailable, the proxy records `prune_fail_open` and forwards the original request.
 
 ## Development
 
