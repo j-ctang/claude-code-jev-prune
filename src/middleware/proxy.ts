@@ -27,8 +27,15 @@ const REQUEST_HEADER_BLOCKLIST = new Set([
   "content-encoding",
   "content-length",
   "host",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
   "transfer-encoding",
   "typesafe-api-key",
+  "upgrade",
   "x-typesafe-api-key",
 ]);
 
@@ -36,7 +43,14 @@ const RESPONSE_HEADER_BLOCKLIST = new Set([
   "connection",
   "content-encoding",
   "content-length",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "proxy-connection",
+  "te",
+  "trailer",
   "transfer-encoding",
+  "upgrade",
 ]);
 
 function isAnthropicRequest(value: unknown): value is AnthropicRequest {
@@ -48,10 +62,25 @@ function isAnthropicRequest(value: unknown): value is AnthropicRequest {
   );
 }
 
+function hopByHopFilter(
+  blocklist: ReadonlySet<string>,
+  connection: string | null | undefined,
+): Set<string> {
+  const blockedHeaders = new Set(blocklist);
+  for (const name of (connection ?? "").split(",")) {
+    if (name.trim()) blockedHeaders.add(name.trim().toLowerCase());
+  }
+  return blockedHeaders;
+}
+
 function requestHeaders(request: Request): Headers {
   const headers = new Headers();
+  const blockedHeaders = hopByHopFilter(
+    REQUEST_HEADER_BLOCKLIST,
+    request.headers.connection,
+  );
   for (const [name, rawValue] of Object.entries(request.headers)) {
-    if (REQUEST_HEADER_BLOCKLIST.has(name.toLowerCase()) || rawValue === undefined) {
+    if (blockedHeaders.has(name.toLowerCase()) || rawValue === undefined) {
       continue;
     }
     if (Array.isArray(rawValue)) {
@@ -64,8 +93,12 @@ function requestHeaders(request: Request): Headers {
 }
 
 function copyResponseHeaders(upstream: globalThis.Response, response: Response) {
+  const blockedHeaders = hopByHopFilter(
+    RESPONSE_HEADER_BLOCKLIST,
+    upstream.headers.get("connection"),
+  );
   upstream.headers.forEach((value, name) => {
-    if (!RESPONSE_HEADER_BLOCKLIST.has(name.toLowerCase())) {
+    if (!blockedHeaders.has(name.toLowerCase())) {
       response.setHeader(name, value);
     }
   });

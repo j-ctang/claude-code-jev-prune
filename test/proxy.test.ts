@@ -190,6 +190,35 @@ describe("Anthropic proxy", () => {
     expect(upstream.requests[0]?.body).toEqual(body);
   });
 
+  test("strips static and Connection-declared hop-by-hop headers", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, {
+        "content-type": "application/json",
+        connection: "x-upstream-private",
+        "keep-alive": "timeout=5",
+        "x-upstream-private": "must-not-reach-client",
+      });
+      response.end("{}");
+    });
+    const app = appFor(
+      upstream.url,
+      { async score() { return new Map(); } },
+      { pruningEnabled: false },
+    );
+
+    const response = await request(app)
+      .post("/v1/messages/count_tokens")
+      .set("connection", "x-client-private")
+      .set("keep-alive", "timeout=5")
+      .set("x-client-private", "must-not-reach-upstream")
+      .send({ messages: [] });
+
+    expect(response.status).toBe(200);
+    expect(upstream.requests[0]?.headers["keep-alive"]).toBeUndefined();
+    expect(upstream.requests[0]?.headers["x-client-private"]).toBeUndefined();
+    expect(response.headers["x-upstream-private"]).toBeUndefined();
+  });
+
   test("relays upstream error status and response body", async () => {
     const upstream = await startUpstream((_incoming, response) => {
       response.writeHead(429, {
