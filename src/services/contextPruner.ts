@@ -9,10 +9,12 @@ import type {
   ToolUseBlock,
 } from "../types.js";
 import { estimateTokens } from "../utils/tokenCounter.js";
+import type { AppLogger } from "../utils/logger.js";
 
 interface ContextPrunerOptions {
   config: Config;
   scorer: RelevanceScorer;
+  logger?: AppLogger;
 }
 
 interface LocatedToolUse {
@@ -45,11 +47,13 @@ function isToolResult(block: ContentBlock): block is ToolResultBlock {
 export class ContextPruner {
   private readonly config: Config;
   private readonly scorer: RelevanceScorer;
+  private readonly logger: AppLogger | undefined;
   private readonly dropCache = new Set<string>();
 
   constructor(options: ContextPrunerOptions) {
     this.config = options.config;
     this.scorer = options.scorer;
+    this.logger = options.logger;
   }
 
   async prune(request: AnthropicRequest): Promise<PruneResult> {
@@ -98,6 +102,15 @@ export class ContextPruner {
         const score = scores.get(candidate.toolUseId);
         if (score === undefined) {
           throw new Error(`Missing score for ${candidate.toolUseId}`);
+        }
+        if (this.config.debug) {
+          this.logger?.debug("prune_decision", {
+            toolName: candidate.toolName,
+            toolUseId: candidate.toolUseId,
+            relevance: score,
+            cutoff,
+            outcome: score < cutoff ? "drop" : "keep",
+          });
         }
         if (score < cutoff) {
           droppedIds.add(candidate.toolUseId);

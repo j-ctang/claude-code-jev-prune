@@ -275,4 +275,51 @@ describe("ContextPruner", () => {
     expect(result.request).toBe(twoToolRequest);
     expect(result.reason).toBe("fail-open");
   });
+
+  test("debug logging emits decision metadata without tool content", async () => {
+    const events: Array<{
+      message: string;
+      metadata: Record<string, unknown> | undefined;
+    }> = [];
+    const logger = {
+      info: () => undefined,
+      warn: () => undefined,
+      error: () => undefined,
+      debug(message: string, metadata?: Record<string, unknown>) {
+        events.push({ message, metadata });
+      },
+    };
+    const pruner = new ContextPruner({
+      config: config({ debug: true }),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+      logger,
+    });
+
+    await pruner.prune(twoToolRequest);
+
+    expect(events).toEqual([
+      {
+        message: "prune_decision",
+        metadata: {
+          toolName: "read_file",
+          toolUseId: "call-old",
+          relevance: 0.1,
+          cutoff: 0.5,
+          outcome: "drop",
+        },
+      },
+      {
+        message: "prune_decision",
+        metadata: {
+          toolName: "read_file",
+          toolUseId: "call-new",
+          relevance: 0.9,
+          cutoff: 0.5,
+          outcome: "keep",
+        },
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("old.log");
+    expect(JSON.stringify(events)).not.toContain("stale output");
+  });
 });
