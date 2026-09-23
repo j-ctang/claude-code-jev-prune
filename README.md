@@ -1,4 +1,4 @@
-# claude-code-jev-prune
+# Jev Prune for Claude Code
 
 A local HTTP proxy that removes stale Claude tool-call context without summarizing retained messages.
 
