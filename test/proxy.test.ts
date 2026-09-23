@@ -80,6 +80,7 @@ function testConfig(
     pruneThreshold: 0,
     triggerTokens: 1_000_000,
     targetTokens: 0,
+    rescoreTokens: 0,
     notify: false,
     keepRecent: 0,
     excludeTools: new Set(),

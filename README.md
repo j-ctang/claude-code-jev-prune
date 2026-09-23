@@ -71,6 +71,7 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failu
 | `JEV_PRUNE_THRESHOLD` | `120000` | Estimated tokens at which pruning runs on the next new user turn. |
 | `JEV_PRUNE_TRIGGER_TOKENS` | `140000` | Estimated tokens at which the aggressive cutoff is used. |
 | `JEV_PRUNE_TARGET_TOKENS` | `80000` | Size a prune aims for. Above it, the proxy warns and suggests a handoff. |
+| `JEV_PRUNE_RESCORE_TOKENS` | `20000` | Growth since the last full scoring before kept tool results are scored again. |
 | `JEV_PRUNE_NOTIFY` | `true` | Appends a one-line pruning notice to the new user turn so Claude can tell the user. |
 | `JEV_PRUNE_KEEP_RECENT` | `5` | Number of newest matched tool pairs never evaluated or removed. |
 | `JEV_PRUNE_EXCLUDE_TOOLS` | empty | Comma-separated tool names never evaluated or removed. |
@@ -94,7 +95,7 @@ The proxy estimates tokens as `ceil(JSON.stringify(request).length / 4)`. This i
 
 The proxy will not delete protected content merely to hit the target.
 
-Jev requests contain no more than 32 named `noul` questions per batch. Drop decisions are cached by a fingerprint of the tool-use ID, name, input, and result. Kept candidates are evaluated again at the next prune because the task goal may change.
+Jev requests contain no more than 32 named `noul` questions per batch. Drop decisions are cached by a fingerprint of the tool-use ID, name, input, and result. Keep decisions are remembered too: between full scorings, only tool results Jev has not seen are sent. Kept results are scored again once the context grows by `JEV_PRUNE_RESCORE_TOKENS` since the last full scoring, or when you run `/jev-prune`, because the task goal may have changed.
 
 Each `/v1/messages` response is logged as `anthropic_usage` with Anthropic's real `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens`.
 

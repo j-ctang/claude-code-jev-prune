@@ -22,6 +22,7 @@ function config(overrides: Partial<Config> = {}): Config {
     pruneThreshold: 0,
     triggerTokens: 1_000_000,
     targetTokens: 0,
+    rescoreTokens: 0,
     notify: false,
     keepRecent: 0,
     excludeTools: new Set(),
@@ -538,6 +539,90 @@ describe("ContextPruner", () => {
       { type: "text", text: result.notice },
     ]);
     expect(observed.batches).toHaveLength(1);
+  });
+
+  describe("keep decisions", () => {
+    const withExtraPair = (id: string, output: string) => {
+      const request = clone(twoToolRequest);
+      request.messages.splice(-1, 0,
+        {
+          role: "assistant",
+          content: [contentBlock({ type: "tool_use", id, name: "bash", input: {} })],
+        },
+        {
+          role: "user",
+          content: [contentBlock({ type: "tool_result", tool_use_id: id, content: output })],
+        },
+      );
+      return request;
+    };
+    const batchIds = (observed: { batches: ToolCandidate[][] }) =>
+      observed.batches.map((batch) => batch.map((candidate) => candidate.toolUseId));
+
+    test("are reused so only new candidates are scored", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: config({ rescoreTokens: 1_000_000 }),
+        scorer: scorerReturning({ "call-old": 0.9, "call-new": 0.9, "call-3": 0.9 }, observed),
+      });
+
+      const first = await pruner.prune(twoToolRequest, { sessionId: "s" });
+      const second = await pruner.prune(twoToolRequest, { sessionId: "s" });
+      const third = await pruner.prune(withExtraPair("call-3", "ok"), { sessionId: "s" });
+
+      expect(first.evaluated).toBe(2);
+      expect(second.reason).toBe("no-candidates");
+      expect(third.evaluated).toBe(1);
+      expect(batchIds(observed)).toEqual([["call-old", "call-new"], ["call-3"]]);
+    });
+
+    test("are re-scored after the context grows by the rescore amount", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const grown = withExtraPair("call-3", "x".repeat(4_000));
+      const pruner = new ContextPruner({
+        config: config({ rescoreTokens: 500 }),
+        scorer: scorerReturning({ "call-old": 0.9, "call-new": 0.9, "call-3": 0.9 }, observed),
+      });
+
+      await pruner.prune(twoToolRequest, { sessionId: "s" });
+      await pruner.prune(grown, { sessionId: "s" });
+
+      expect(batchIds(observed)).toEqual([
+        ["call-old", "call-new"],
+        ["call-old", "call-new", "call-3"],
+      ]);
+    });
+
+    test("are re-scored in full by a manual prune", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: config({ rescoreTokens: 1_000_000 }),
+        scorer: scorerReturning({ "call-old": 0.9, "call-new": 0.9 }, observed),
+      });
+
+      await pruner.prune(twoToolRequest, { sessionId: "s" });
+      pruner.requestManualPrune("s");
+      const manual = await pruner.prune(twoToolRequest, { sessionId: "s" });
+
+      expect(manual.evaluated).toBe(2);
+      expect(observed.batches).toHaveLength(2);
+    });
+
+    test("are tracked separately per session", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: config({ rescoreTokens: 1_000_000 }),
+        scorer: scorerReturning({ "call-old": 0.9, "call-new": 0.9, "call-3": 0.9 }, observed),
+      });
+
+      await pruner.prune(twoToolRequest, { sessionId: "a" });
+      await pruner.prune(withExtraPair("call-3", "ok"), { sessionId: "b" });
+
+      expect(batchIds(observed)).toEqual([
+        ["call-old", "call-new"],
+        ["call-old", "call-new", "call-3"],
+      ]);
+    });
   });
 
   describe("manual prune", () => {

@@ -29,6 +29,21 @@ export interface PruneOptions {
 // Plugin commands are namespaced, e.g. `/jev-prune:jev-prune`.
 const MANUAL_COMMAND = /<command-name>\/(?:[\w-]+:)?jev-prune<\/command-name>/;
 
+const DEFAULT_SESSION = "default";
+const MAX_TRACKED_SESSIONS = 1_000;
+
+/** Inserts or refreshes `key` as most recent, evicting the oldest past `max`. */
+function remember<V>(map: Map<string, V>, key: string, value: V, max: number) {
+  if (max <= 0) return;
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) {
+    const oldest = map.keys().next().value as string | undefined;
+    if (oldest === undefined) return;
+    map.delete(oldest);
+  }
+}
+
 const MANUAL_PRUNE_TTL_MS = 10 * 60 * 1000;
 const MAX_PENDING_MANUAL_PRUNES = 1_000;
 
@@ -76,6 +91,8 @@ export class ContextPruner {
   private readonly logger: AppLogger | undefined;
   private readonly maxCachedDrops: number;
   private readonly dropCache = new Map<string, true>();
+  private readonly keepCache = new Map<string, true>();
+  private readonly lastFullScoreTokens = new Map<string, number>();
   private readonly now: () => number;
   private readonly manualPrunes = new Map<string, number>();
 
@@ -143,8 +160,11 @@ export class ContextPruner {
           !this.config.excludeTools.has(candidate.toolName),
       );
       const eligibleForScoring: ToolCandidate[] = [];
+      const keys = new Map<ToolCandidate, string>();
       for (const candidate of eligibleByPolicy) {
-        if (this.touchCachedDrop(cacheKey(candidate))) {
+        const key = cacheKey(candidate);
+        keys.set(candidate, key);
+        if (this.touchCachedDrop(key)) {
           cachedIds.add(candidate.toolUseId);
         } else {
           eligibleForScoring.push(candidate);
@@ -188,10 +208,34 @@ export class ContextPruner {
         );
       }
 
+      // Keep decisions are reused until the context grows by rescoreTokens
+      // since the last full scoring (or the user runs /jev-prune), so stable
+      // candidates are not re-sent to Jev on every turn.
+      const sessionKey = options.sessionId ?? DEFAULT_SESSION;
+      const lastFull = this.lastFullScoreTokens.get(sessionKey);
+      const fullRescore =
+        manual ||
+        lastFull === undefined ||
+        cachedTokens - lastFull >= this.config.rescoreTokens;
+      const toScore = fullRescore
+        ? eligibleForScoring
+        : eligibleForScoring.filter(
+            (candidate) => !this.keepCache.has(keys.get(candidate) ?? ""),
+          );
+      if (toScore.length === 0) {
+        return this.cachedOnly(
+          cachedRequest,
+          beforeTokens,
+          cachedTokens,
+          cachedIds.size,
+          "no-candidates",
+        );
+      }
+
       const goal = this.latestUserGoal(request);
-      const scores = await this.scorer.score(goal, eligibleForScoring);
+      const scores = await this.scorer.score(goal, toScore);
       const cutoff = cachedTokens >= this.config.triggerTokens ? 0.7 : 0.5;
-      const scoredCandidates = eligibleForScoring.map((candidate) => {
+      const scoredCandidates = toScore.map((candidate) => {
         const score = scores.get(candidate.toolUseId);
         if (score === undefined) {
           throw new PruneError(`Missing score for ${candidate.toolUseId}`);
@@ -210,8 +254,12 @@ export class ContextPruner {
             outcome: score < cutoff ? "drop" : "keep",
           });
         }
+        const key = keys.get(candidate) ?? cacheKey(candidate);
         if (score < cutoff) {
           newlyDroppedCandidates.push(candidate);
+          this.keepCache.delete(key);
+        } else {
+          remember(this.keepCache, key, true, this.maxCachedDrops);
         }
       }
       const droppedIds = new Set(cachedIds);
@@ -225,6 +273,14 @@ export class ContextPruner {
           ? cachedRequest
           : this.removePairs(request, droppedIds);
       const afterTokens = estimateTokens(prunedRequest);
+      if (fullRescore) {
+        remember(
+          this.lastFullScoreTokens,
+          sessionKey,
+          afterTokens,
+          MAX_TRACKED_SESSIONS,
+        );
+      }
       const aboveTarget = afterTokens > this.config.targetTokens;
       const notice = this.notice(
         manual,
@@ -239,7 +295,7 @@ export class ContextPruner {
           : prunedRequest,
         beforeTokens,
         afterTokens,
-        evaluated: eligibleForScoring.length,
+        evaluated: toScore.length,
         dropped: droppedIds.size,
         reason: "pruned",
         manual,
@@ -386,16 +442,7 @@ export class ContextPruner {
   }
 
   private cacheDrop(candidate: ToolCandidate): void {
-    if (this.maxCachedDrops <= 0) return;
-    const key = cacheKey(candidate);
-    this.dropCache.delete(key);
-    this.dropCache.set(key, true);
-    while (this.dropCache.size > this.maxCachedDrops) {
-      const oldestKey = this.dropCache.keys().next().value as
-        string | undefined;
-      if (oldestKey === undefined) return;
-      this.dropCache.delete(oldestKey);
-    }
+    remember(this.dropCache, cacheKey(candidate), true, this.maxCachedDrops);
   }
 
   private passThrough(
