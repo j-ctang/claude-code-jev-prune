@@ -98,6 +98,27 @@ Jev requests contain no more than 32 named `noul` questions per batch. Drop deci
 
 Each `/v1/messages` response is logged as `anthropic_usage` with Anthropic's real `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens`.
 
+## Manual Pruning
+
+Run `/jev-prune` in Claude Code to prune immediately, even below `JEV_PRUNE_THRESHOLD`. Install the command once:
+
+```bash
+mkdir -p ~/.claude/commands
+cp commands/jev-prune.md ~/.claude/commands/
+```
+
+The proxy recognizes the command in the request itself, prunes that turn, and attaches a notice that Claude reports back. If nothing is eligible (the newest `JEV_PRUNE_KEEP_RECENT` pairs are always kept), the notice says so.
+
+Scripts can queue the same thing for a session's next user turn:
+
+```bash
+curl -X POST http://127.0.0.1:5590/jev-prune/prune-next \
+  -H 'content-type: application/json' \
+  -d "{\"sessionId\":\"$CLAUDE_CODE_SESSION_ID\"}"
+```
+
+The session is matched against Claude Code's `x-claude-code-session-id` request header. Queued requests expire after ten minutes.
+
 ## Privacy Boundary
 
 When pruning activates, the following data is sent to TypeSafe:

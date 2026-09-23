@@ -540,6 +540,128 @@ describe("ContextPruner", () => {
     expect(observed.batches).toHaveLength(1);
   });
 
+  describe("manual prune", () => {
+    const highThreshold = {
+      pruneThreshold: 1_000_000,
+      triggerTokens: 1_000_000,
+    };
+
+    test("prunes below the threshold once for the requesting session", async () => {
+      const observed = {
+        goals: [] as string[],
+        batches: [] as ToolCandidate[][],
+      };
+      const pruner = new ContextPruner({
+        config: config({ ...highThreshold, notify: true }),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
+      });
+      pruner.requestManualPrune("session-a");
+
+      const other = await pruner.prune(twoToolRequest, {
+        sessionId: "session-b",
+      });
+      const manual = await pruner.prune(twoToolRequest, {
+        sessionId: "session-a",
+      });
+      const again = await pruner.prune(clone(twoToolRequest), {
+        sessionId: "session-a",
+      });
+
+      expect(other.reason).toBe("below-threshold");
+      expect(manual.reason).toBe("pruned");
+      expect(manual.manual).toBe(true);
+      expect(manual.notice).toMatch(/Manual prune: pruned 1/);
+      expect(allToolUseIds(manual.request)).toEqual(["call-new"]);
+      expect(again.reason).toBe("below-threshold");
+      expect(observed.batches).toHaveLength(1);
+    });
+
+    test("runs when the /jev-prune slash command starts the turn", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: config(highThreshold),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
+      });
+      const withCommand = (name: string) => {
+        const request = clone(twoToolRequest);
+        request.messages.splice(-1, 1, {
+          role: "user",
+          content: [
+            contentBlock({
+              type: "text",
+              text: `<command-message>jev-prune</command-message>\n<command-name>${name}</command-name>\n`,
+            }),
+            contentBlock({ type: "text", text: "Report the notice." }),
+          ],
+        });
+        request.messages.push({ role: "system", content: "hook context" });
+        return request;
+      };
+
+      const plain = await pruner.prune(withCommand("/jev-prune"));
+      const plugin = await pruner.prune(withCommand("/jev-prune:jev-prune"));
+      const other = await pruner.prune(withCommand("/review"));
+
+      expect(plain.reason).toBe("pruned");
+      expect(plain.manual).toBe(true);
+      expect(plugin.manual).toBe(true);
+      expect(other.reason).toBe("below-threshold");
+    });
+
+    test("waits for a new user turn before running", async () => {
+      const pruner = new ContextPruner({
+        config: config(highThreshold),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+      });
+      const midTask = clone(twoToolRequest);
+      midTask.messages.pop();
+      pruner.requestManualPrune("session-a");
+
+      const during = await pruner.prune(midTask, { sessionId: "session-a" });
+      const after = await pruner.prune(twoToolRequest, {
+        sessionId: "session-a",
+      });
+
+      expect(during.reason).toBe("below-threshold");
+      expect(after.reason).toBe("pruned");
+    });
+
+    test("ignores a request older than ten minutes", async () => {
+      let now = 0;
+      const pruner = new ContextPruner({
+        config: config(highThreshold),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+        now: () => now,
+      });
+      pruner.requestManualPrune("session-a");
+      now = 10 * 60 * 1000 + 1;
+
+      const result = await pruner.prune(twoToolRequest, {
+        sessionId: "session-a",
+      });
+
+      expect(result.reason).toBe("below-threshold");
+    });
+
+    test("tells the user when nothing is eligible", async () => {
+      const pruner = new ContextPruner({
+        config: config({ ...highThreshold, keepRecent: 5, notify: true }),
+        scorer: scorerReturning({}),
+      });
+      pruner.requestManualPrune("session-a");
+
+      const result = await pruner.prune(twoToolRequest, {
+        sessionId: "session-a",
+      });
+
+      expect(result.reason).toBe("no-candidates");
+      expect(result.notice).toMatch(/no eligible tool results/);
+      expect(JSON.stringify(result.request.messages.at(-1))).toContain(
+        "no eligible tool results",
+      );
+    });
+  });
+
   test("uses the latest non-tool user text as the goal", async () => {
     const observed = {
       goals: [] as string[],
