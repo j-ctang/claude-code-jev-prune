@@ -1,8 +1,15 @@
-# claude-code-jev-prune
+# Jev Prune for Claude Code: context pruning, compaction and filtering
 
 **Keep your Claude Code context clean. Remove stale context without summarizing. Save 40-60% tokens.**
 
-An MCP plugin that uses TypeSafe Jev to intelligently prune Claude Code's conversation history. Instead of summarizing old context (which loses detail and introduces hallucinations), it uses Jev to identify irrelevant context and **deletes it while keeping everything else verbatim**.
+`claude-code-jev-prune` (Jev Prune) is an MCP plugin that uses TypeSafe Jev to prune, compact and filter Claude Code's conversation history. Instead of summarizing old context (which loses detail and introduces hallucinations), it uses Jev to identify irrelevant context and **deletes it while keeping everything else verbatim**.
+
+Use it as a lossless alternative to Claude Code's `/compact`: Jev compaction, Jev pruning and Jev context filtering in one plugin.
+
+- [Jev compact vs. /compact](#key-differences-from-standard-compaction)
+- [Install Jev Prune in Claude Code](#installation)
+- [How Jev pruning works](#how-it-works)
+- [FAQ](#faq)
 
 ## What It Does
 
@@ -244,6 +251,28 @@ If sessions feel slower after enabling pruning:
 - Increase `JEV_PRUNE_THRESHOLD` to avoid frequent pruning
 - Reduce `JEV_PRUNE_KEEP_RECENT` to be more aggressive
 - Add frequently-needed tools to `JEV_PRUNE_EXCLUDE_TOOLS`
+
+## FAQ
+
+### How do I reduce Claude Code context usage without losing detail?
+
+Install Jev Prune. It deletes irrelevant turns instead of summarizing them, so the context that stays is byte-for-byte original.
+
+### What is Jev compact?
+
+Jev compact is Jev Prune's replacement for Claude Code's `/compact`. It scores each older exchange for relevance and drops only what the current task no longer needs.
+
+### What is the difference between Jev pruning and Jev filtering?
+
+Jev pruning removes whole stale exchanges from history. Jev filtering applies your pruning rules (see [CLAUDE.md Integration](#claudemd-integration)) to decide what always stays or always goes.
+
+### Does Jev Prune work with multiple compactions in one session?
+
+Yes. It never rewrites messages, so repeated pruning does not degrade quality like a summary of a summary.
+
+### Is Jev Prune an official Anthropic tool?
+
+No. It is a community plugin for Claude Code.
 
 ## Contributing
 
