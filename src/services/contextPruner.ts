@@ -42,9 +42,7 @@ function isToolUse(block: ContentBlock): block is ToolUseBlock {
 }
 
 function isToolResult(block: ContentBlock): block is ToolResultBlock {
-  return (
-    block.type === "tool_result" && typeof block.tool_use_id === "string"
-  );
+  return block.type === "tool_result" && typeof block.tool_use_id === "string";
 }
 
 function cacheKey(candidate: ToolCandidate): string {
@@ -83,6 +81,10 @@ export class ContextPruner {
       return this.passThrough(request, beforeTokens, "below-threshold");
     }
 
+    // Earlier drops are re-applied on every request so the pruned prefix stays
+    // byte-identical and keeps its prompt-cache discount.
+    const cachedIds = new Set<string>();
+    let cachedRequest = request;
     try {
       const candidates = this.extractCandidates(request);
       if (candidates.length === 0) {
@@ -101,21 +103,52 @@ export class ContextPruner {
           !protectedIds.has(candidate.toolUseId) &&
           !this.config.excludeTools.has(candidate.toolName),
       );
-      const droppedIds = new Set<string>();
       const eligibleForScoring: ToolCandidate[] = [];
       for (const candidate of eligibleByPolicy) {
         if (this.touchCachedDrop(cacheKey(candidate))) {
-          droppedIds.add(candidate.toolUseId);
+          cachedIds.add(candidate.toolUseId);
         } else {
           eligibleForScoring.push(candidate);
         }
       }
+      if (cachedIds.size > 0) {
+        cachedRequest = this.removePairs(request, cachedIds);
+      }
+      const cachedTokens = estimateTokens(cachedRequest);
+
+      if (cachedTokens < this.config.pruneThreshold) {
+        return this.cachedOnly(
+          cachedRequest,
+          beforeTokens,
+          cachedTokens,
+          cachedIds.size,
+          "below-threshold",
+        );
+      }
+      // Pruning mid-task would cut context the agent is actively using, so new
+      // scoring only happens when the user starts a new turn.
+      if (!this.isNewUserTurn(request)) {
+        return this.cachedOnly(
+          cachedRequest,
+          beforeTokens,
+          cachedTokens,
+          cachedIds.size,
+          "mid-task",
+        );
+      }
+      if (eligibleForScoring.length === 0) {
+        return this.cachedOnly(
+          cachedRequest,
+          beforeTokens,
+          cachedTokens,
+          cachedIds.size,
+          "no-candidates",
+        );
+      }
+
       const goal = this.latestUserGoal(request);
-      const scores =
-        eligibleForScoring.length === 0
-          ? new Map<string, number>()
-          : await this.scorer.score(goal, eligibleForScoring);
-      const cutoff = beforeTokens >= this.config.triggerTokens ? 0.7 : 0.5;
+      const scores = await this.scorer.score(goal, eligibleForScoring);
+      const cutoff = cachedTokens >= this.config.triggerTokens ? 0.7 : 0.5;
       const scoredCandidates = eligibleForScoring.map((candidate) => {
         const score = scores.get(candidate.toolUseId);
         if (score === undefined) {
@@ -139,43 +172,123 @@ export class ContextPruner {
           newlyDroppedCandidates.push(candidate);
         }
       }
+      const droppedIds = new Set(cachedIds);
       for (const candidate of newlyDroppedCandidates) {
         droppedIds.add(candidate.toolUseId);
         this.cacheDrop(candidate);
       }
 
-      if (droppedIds.size === 0) {
-        return {
-          request,
-          beforeTokens,
-          afterTokens: beforeTokens,
-          evaluated: eligibleForScoring.length,
-          dropped: 0,
-          reason:
-            eligibleForScoring.length === 0 ? "no-candidates" : "pruned",
-        };
-      }
-
-      const prunedRequest = this.removePairs(request, droppedIds);
+      const prunedRequest =
+        droppedIds.size === cachedIds.size
+          ? cachedRequest
+          : this.removePairs(request, droppedIds);
+      const afterTokens = estimateTokens(prunedRequest);
+      const aboveTarget = afterTokens > this.config.targetTokens;
+      const notice = this.notice(
+        newlyDroppedCandidates.length,
+        cachedTokens,
+        afterTokens,
+        aboveTarget,
+      );
       return {
-        request: prunedRequest,
+        request: this.config.notify
+          ? this.appendNotice(prunedRequest, notice)
+          : prunedRequest,
         beforeTokens,
-        afterTokens: estimateTokens(prunedRequest),
+        afterTokens,
         evaluated: eligibleForScoring.length,
         dropped: droppedIds.size,
         reason: "pruned",
+        aboveTarget,
+        notice,
       };
     } catch (error) {
+      const tokens = estimateTokens(cachedRequest);
       return {
-        request,
+        request: cachedRequest,
         beforeTokens,
-        afterTokens: beforeTokens,
+        afterTokens: tokens,
         evaluated: 0,
-        dropped: 0,
+        dropped: cachedIds.size,
         reason: "fail-open",
         failureReason: loggableReason(error),
       };
     }
+  }
+
+  private cachedOnly(
+    request: AnthropicRequest,
+    beforeTokens: number,
+    afterTokens: number,
+    dropped: number,
+    reason: "below-threshold" | "mid-task" | "no-candidates",
+  ): PruneResult {
+    return {
+      request,
+      beforeTokens,
+      afterTokens,
+      evaluated: 0,
+      dropped,
+      reason,
+    };
+  }
+
+  /**
+   * Claude Code may append `system` messages (hook context) after the user's
+   * turn, so the turn boundary is judged from the last user/assistant message.
+   */
+  private lastTurnIndex(request: AnthropicRequest): number {
+    for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+      const role = request.messages[index]?.role;
+      if (role === "user" || role === "assistant") return index;
+    }
+    return -1;
+  }
+
+  private isNewUserTurn(request: AnthropicRequest): boolean {
+    const last = request.messages[this.lastTurnIndex(request)];
+    if (!last || last.role !== "user") return false;
+    if (typeof last.content === "string") return true;
+    return !last.content.some((block) => isToolResult(block));
+  }
+
+  private notice(
+    newlyDropped: number,
+    beforeTokens: number,
+    afterTokens: number,
+    aboveTarget: boolean,
+  ): string {
+    const summary =
+      `[jev-prune] Pruned ${newlyDropped} stale tool result(s): context ` +
+      `~${Math.round(beforeTokens / 1000)}K -> ~${Math.round(afterTokens / 1000)}K tokens.`;
+    if (!aboveTarget) {
+      return `${summary} Mention this to the user in one short line.`;
+    }
+    return (
+      `${summary} Context is still above the ` +
+      `~${Math.round(this.config.targetTokens / 1000)}K target, so answer quality may drop. ` +
+      "Tell the user in one short line and suggest writing a handoff file " +
+      "for a fresh session."
+    );
+  }
+
+  private appendNotice(
+    request: AnthropicRequest,
+    notice: string,
+  ): AnthropicRequest {
+    const index = this.lastTurnIndex(request);
+    const last = request.messages[index];
+    if (!last) return request;
+    const content =
+      typeof last.content === "string"
+        ? [{ type: "text", text: last.content }]
+        : last.content;
+    const messages = [...request.messages];
+    messages[index] = {
+      ...last,
+      content: [...content, { type: "text", text: notice }],
+    };
+    return { ...request, messages };
   }
 
   private touchCachedDrop(key: string): boolean {
@@ -191,7 +304,8 @@ export class ContextPruner {
     this.dropCache.delete(key);
     this.dropCache.set(key, true);
     while (this.dropCache.size > this.maxCachedDrops) {
-      const oldestKey = this.dropCache.keys().next().value as string | undefined;
+      const oldestKey = this.dropCache.keys().next().value as
+        string | undefined;
       if (oldestKey === undefined) return;
       this.dropCache.delete(oldestKey);
     }

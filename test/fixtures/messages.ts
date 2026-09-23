@@ -54,6 +54,7 @@ export const twoToolRequest: AnthropicRequest = {
         },
       ],
     },
+    { role: "user", content: "Keep going with the JWT fix." },
   ],
 };
 

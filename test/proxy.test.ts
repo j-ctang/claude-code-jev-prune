@@ -79,6 +79,8 @@ function testConfig(
     pruningEnabled: true,
     pruneThreshold: 0,
     triggerTokens: 1_000_000,
+    targetTokens: 0,
+    notify: false,
     keepRecent: 0,
     excludeTools: new Set(),
     debug: false,
@@ -210,6 +212,58 @@ describe("Anthropic proxy", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ path: "/v1/messages/count_tokens?beta=true" });
     expect(upstream.requests[0]?.body).toEqual(body);
+  });
+
+  test("logs input and cache usage from JSON and streamed responses", async () => {
+    const usage = {
+      input_tokens: 12,
+      cache_read_input_tokens: 90_000,
+      cache_creation_input_tokens: 300,
+      output_tokens: 5,
+    };
+    const upstream = await startUpstream((incoming, response) => {
+      const body = incoming.body as { stream?: boolean };
+      if (body.stream) {
+        response.writeHead(200, { "content-type": "text/event-stream" });
+        response.write("event: message_start\n");
+        response.write(
+          `data: ${JSON.stringify({ type: "message_start", message: { usage } })}\n\n`,
+        );
+        response.end("event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ type: "message", usage }));
+    });
+    const events: Array<Record<string, unknown> | undefined> = [];
+    const logger: AppLogger = {
+      ...silentLogger,
+      info(message, metadata) {
+        if (message === "anthropic_usage") events.push(metadata);
+      },
+    };
+    const app = appFor(
+      upstream.url,
+      { async score() { return new Map(); } },
+      { pruningEnabled: false },
+      logger,
+    );
+
+    const json = await request(app).post("/v1/messages").send(twoToolRequest);
+    const streamed = await request(app)
+      .post("/v1/messages")
+      .send({ ...twoToolRequest, stream: true });
+
+    expect(json.body).toEqual({ type: "message", usage });
+    expect(streamed.text).toContain("message_stop");
+    const expected = {
+      status: 200,
+      inputTokens: 12,
+      cacheReadInputTokens: 90_000,
+      cacheCreationInputTokens: 300,
+      totalInputTokens: 90_312,
+    };
+    expect(events).toEqual([expected, expected]);
   });
 
   test("strips static and Connection-declared hop-by-hop headers", async () => {

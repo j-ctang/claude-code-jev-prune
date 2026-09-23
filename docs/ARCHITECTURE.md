@@ -107,11 +107,12 @@ ceil(JSON.stringify(request).length / 4)
 
 | Estimated size | Behavior |
 | --- | --- |
-| Below `JEV_PRUNE_THRESHOLD` | Forward without TypeSafe. |
+| Below `JEV_PRUNE_THRESHOLD` after earlier drops | Forward without TypeSafe. |
+| Mid-task (last message is a `tool_result`) | Re-apply earlier drops only; no scoring. |
 | At/above normal threshold | Drop relevance scores below `0.50`. |
 | At/above `JEV_PRUNE_TRIGGER_TOKENS` | Drop relevance scores below `0.70`. |
 
-The second threshold is an aggressive policy switch, not a hard output-size guarantee.
+The second threshold is an aggressive policy switch, not a hard output-size guarantee. Scoring only runs on a new user turn. When a prune leaves the request above `JEV_PRUNE_TARGET_TOKENS`, the proxy warns and suggests a handoff.
 
 ## Failure Model
 

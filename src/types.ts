@@ -31,7 +31,7 @@ export type ContentBlock =
   | UnknownBlock;
 
 export interface Message {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string | ContentBlock[];
   [key: string]: unknown;
 }
@@ -71,9 +71,12 @@ export interface PruneResult {
     | "disabled"
     | "below-threshold"
     | "no-candidates"
+    | "mid-task"
     | "pruned"
     | "fail-open";
   failureReason?: string;
+  aboveTarget?: boolean;
+  notice?: string;
 }
 
 export interface ProxyStats {
