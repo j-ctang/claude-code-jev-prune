@@ -1001,6 +1001,28 @@ describe("ContextPruner", () => {
       expect(other.reason).toBe("below-threshold");
     });
 
+    test("keeps a below-threshold prune applied on later requests", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: config(highThreshold),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
+      });
+      pruner.requestManualPrune("session-a");
+      await pruner.prune(twoToolRequest, { sessionId: "session-a" });
+      const midTask = clone(twoToolRequest);
+      midTask.messages.pop();
+
+      const nextTurn = await pruner.prune(clone(twoToolRequest), {
+        sessionId: "session-a",
+      });
+      const during = await pruner.prune(midTask, { sessionId: "session-a" });
+
+      expect(allToolUseIds(nextTurn.request)).toEqual(["call-new"]);
+      expect(nextTurn.reason).toBe("below-threshold");
+      expect(allToolUseIds(during.request)).toEqual(["call-new"]);
+      expect(observed.batches).toHaveLength(1);
+    });
+
     test("waits for a new user turn before running", async () => {
       const pruner = new ContextPruner({
         config: config(highThreshold),

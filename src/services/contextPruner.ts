@@ -144,7 +144,12 @@ export class ContextPruner {
     const manual =
       this.takeManualPrune(request, options.sessionId) ||
       this.invokesManualCommand(request);
-    if (!manual && beforeTokens < this.config.pruneThreshold) {
+    // A small request can skip the work below only when nothing has been
+    // pruned yet: a /jev-prune below the threshold leaves saved decisions that
+    // must still be re-applied, or the pruned output would come back.
+    const nothingSaved =
+      this.dropCache.size === 0 && this.rewriteCache.size === 0;
+    if (!manual && nothingSaved && beforeTokens < this.config.pruneThreshold) {
       return this.resumeNotice(
         this.passThrough(request, beforeTokens, "below-threshold"),
         request,
@@ -160,6 +165,17 @@ export class ContextPruner {
     let newRewrites = false;
     try {
       const candidates = this.extractCandidates(request);
+      if (
+        !manual &&
+        candidates.length === 0 &&
+        beforeTokens < this.config.pruneThreshold
+      ) {
+        return this.resumeNotice(
+          this.passThrough(request, beforeTokens, "below-threshold"),
+          request,
+          firstSeen,
+        );
+      }
       if (candidates.length === 0) {
         return this.nothingToPrune(
           this.passThrough(request, beforeTokens, "no-candidates"),
