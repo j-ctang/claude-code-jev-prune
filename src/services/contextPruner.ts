@@ -233,8 +233,20 @@ export class ContextPruner {
     };
   }
 
+  /**
+   * Claude Code may append `system` messages (hook context) after the user's
+   * turn, so the turn boundary is judged from the last user/assistant message.
+   */
+  private lastTurnIndex(request: AnthropicRequest): number {
+    for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+      const role = request.messages[index]?.role;
+      if (role === "user" || role === "assistant") return index;
+    }
+    return -1;
+  }
+
   private isNewUserTurn(request: AnthropicRequest): boolean {
-    const last = request.messages.at(-1);
+    const last = request.messages[this.lastTurnIndex(request)];
     if (!last || last.role !== "user") return false;
     if (typeof last.content === "string") return true;
     return !last.content.some((block) => isToolResult(block));
@@ -264,19 +276,19 @@ export class ContextPruner {
     request: AnthropicRequest,
     notice: string,
   ): AnthropicRequest {
-    const last = request.messages.at(-1);
+    const index = this.lastTurnIndex(request);
+    const last = request.messages[index];
     if (!last) return request;
     const content =
       typeof last.content === "string"
         ? [{ type: "text", text: last.content }]
         : last.content;
-    return {
-      ...request,
-      messages: [
-        ...request.messages.slice(0, -1),
-        { ...last, content: [...content, { type: "text", text: notice }] },
-      ],
+    const messages = [...request.messages];
+    messages[index] = {
+      ...last,
+      content: [...content, { type: "text", text: notice }],
     };
+    return { ...request, messages };
   }
 
   private touchCachedDrop(key: string): boolean {

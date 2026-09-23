@@ -510,6 +510,36 @@ describe("ContextPruner", () => {
     expect(result.notice).toMatch(/handoff file/);
   });
 
+  test("treats trailing system hook messages as part of the user turn", async () => {
+    const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+    const pruner = new ContextPruner({
+      config: config({ notify: true, targetTokens: 1_000_000_000 }),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
+    });
+    const withHook = clone(twoToolRequest);
+    withHook.messages.push({ role: "system", content: "hook context" });
+    const midTaskWithHook = clone(twoToolRequest);
+    midTaskWithHook.messages.splice(-1, 1, {
+      role: "system",
+      content: "hook context",
+    });
+
+    const midTask = await pruner.prune(midTaskWithHook);
+    const result = await pruner.prune(withHook);
+
+    expect(midTask.reason).toBe("mid-task");
+    expect(result.reason).toBe("pruned");
+    expect(result.request.messages.at(-1)).toEqual({
+      role: "system",
+      content: "hook context",
+    });
+    expect(result.request.messages.at(-2)?.content).toEqual([
+      { type: "text", text: "Keep going with the JWT fix." },
+      { type: "text", text: result.notice },
+    ]);
+    expect(observed.batches).toHaveLength(1);
+  });
+
   test("uses the latest non-tool user text as the goal", async () => {
     const observed = {
       goals: [] as string[],

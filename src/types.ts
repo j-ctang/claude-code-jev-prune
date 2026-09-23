@@ -31,7 +31,7 @@ export type ContentBlock =
   | UnknownBlock;
 
 export interface Message {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   content: string | ContentBlock[];
   [key: string]: unknown;
 }
