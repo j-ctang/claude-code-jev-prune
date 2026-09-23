@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
+import { PruneError, loggableReason } from "../errors.js";
 import type {
   AnthropicRequest,
   ContentBlock,
@@ -118,7 +119,7 @@ export class ContextPruner {
       const scoredCandidates = eligibleForScoring.map((candidate) => {
         const score = scores.get(candidate.toolUseId);
         if (score === undefined) {
-          throw new Error(`Missing score for ${candidate.toolUseId}`);
+          throw new PruneError(`Missing score for ${candidate.toolUseId}`);
         }
         return { candidate, score };
       });
@@ -164,7 +165,7 @@ export class ContextPruner {
         dropped: droppedIds.size,
         reason: "pruned",
       };
-    } catch {
+    } catch (error) {
       return {
         request,
         beforeTokens,
@@ -172,6 +173,7 @@ export class ContextPruner {
         evaluated: 0,
         dropped: 0,
         reason: "fail-open",
+        failureReason: loggableReason(error),
       };
     }
   }

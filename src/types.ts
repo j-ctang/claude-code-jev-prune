@@ -73,6 +73,7 @@ export interface PruneResult {
     | "no-candidates"
     | "pruned"
     | "fail-open";
+  failureReason?: string;
 }
 
 export interface ProxyStats {

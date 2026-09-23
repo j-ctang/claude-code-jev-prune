@@ -1,4 +1,5 @@
 import type { Config } from "../src/config.js";
+import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import type {
   AnthropicRequest,
@@ -161,7 +162,7 @@ describe("ContextPruner", () => {
   test("fails open when scoring rejects", async () => {
     const scorer: RelevanceScorer = {
       async score() {
-        throw new Error("timeout");
+        throw new PruneError("timeout");
       },
     };
     const pruner = new ContextPruner({ config: config(), scorer });
@@ -171,6 +172,21 @@ describe("ContextPruner", () => {
     expect(result.request).toBe(twoToolRequest);
     expect(result.reason).toBe("fail-open");
     expect(result.beforeTokens).toBe(result.afterTokens);
+    expect(result.failureReason).toBe("timeout");
+  });
+
+  test("logs only the error name for errors from other code", async () => {
+    const scorer: RelevanceScorer = {
+      async score() {
+        throw new TypeError("request to https://user:secret@host failed");
+      },
+    };
+    const pruner = new ContextPruner({ config: config(), scorer });
+
+    const result = await pruner.prune(twoToolRequest);
+
+    expect(result.reason).toBe("fail-open");
+    expect(result.failureReason).toBe("TypeError");
   });
 
   test("passes through when disabled or below threshold", async () => {

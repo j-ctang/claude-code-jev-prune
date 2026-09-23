@@ -8,12 +8,14 @@ import { join } from "node:path";
 import request from "supertest";
 import type { Config } from "../src/config.js";
 import { createApp } from "../src/app.js";
+import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import type {
   AnthropicRequest,
   ProxyStats,
   RelevanceScorer,
 } from "../src/types.js";
+import type { AppLogger } from "../src/utils/logger.js";
 import { allToolUseIds, twoToolRequest } from "./fixtures/messages.js";
 
 interface CapturedUpstreamRequest {
@@ -89,7 +91,7 @@ function testConfig(
   };
 }
 
-const silentLogger = {
+const silentLogger: AppLogger = {
   info: () => undefined,
   warn: () => undefined,
   error: () => undefined,
@@ -100,6 +102,7 @@ function appFor(
   upstreamUrl: string,
   scorer: RelevanceScorer,
   overrides: Partial<Config> = {},
+  logger: AppLogger = silentLogger,
 ) {
   const config = testConfig(upstreamUrl, overrides);
   const pruner = new ContextPruner({ config, scorer });
@@ -107,7 +110,7 @@ function appFor(
     config,
     pruner,
     fetchFn: fetch,
-    logger: silentLogger,
+    logger,
     startedAt: Date.now() - 42_000,
   });
 }
@@ -158,14 +161,33 @@ describe("Anthropic proxy", () => {
     });
     const scorer: RelevanceScorer = {
       async score() {
-        throw new Error("TypeSafe timeout");
+        throw new PruneError("TypeSafe timeout");
       },
     };
-    const app = appFor(upstream.url, scorer);
+    const warnings: Array<{
+      message: string;
+      metadata: Record<string, unknown> | undefined;
+    }> = [];
+    const logger: AppLogger = {
+      ...silentLogger,
+      warn(message, metadata) {
+        warnings.push({ message, metadata });
+      },
+    };
+    const app = appFor(upstream.url, scorer, {}, logger);
 
     await request(app).post("/v1/messages").send(twoToolRequest).expect(200);
 
     expect(upstream.requests[0]?.body).toEqual(twoToolRequest);
+    expect(warnings).toEqual([
+      {
+        message: "prune_fail_open",
+        metadata: expect.objectContaining({
+          error: "TypeSafe timeout",
+          durationMs: expect.any(Number),
+        }) as Record<string, unknown>,
+      },
+    ]);
   });
 
   test("passes non-message Anthropic routes through unchanged", async () => {

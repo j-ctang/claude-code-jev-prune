@@ -1,3 +1,4 @@
+import { PruneError } from "../errors.js";
 import type { RelevanceScorer, ToolCandidate } from "../types.js";
 
 const MAX_QUESTIONS_PER_REQUEST = 32;
@@ -95,7 +96,7 @@ export class JevService implements RelevanceScorer {
     });
 
     if (!response.ok) {
-      throw new Error(`TypeSafe request failed with status ${response.status}`);
+      throw new PruneError(`TypeSafe request failed with status ${response.status}`);
     }
 
     const payload: unknown = await response.json();
@@ -105,7 +106,7 @@ export class JevService implements RelevanceScorer {
       const key = `candidate_${index}`;
       const answer = answers[key];
       if (!this.isNoulAnswer(answer)) {
-        throw new Error(`TypeSafe returned an invalid answer for ${key}`);
+        throw new PruneError(`TypeSafe returned an invalid answer for ${key}`);
       }
       scores.set(candidate.toolUseId, answer.noul);
     }

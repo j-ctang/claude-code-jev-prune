@@ -126,6 +126,7 @@ async function forward(
     if (result.reason === "fail-open") {
       dependencies.stats.failOpenEvents += 1;
       dependencies.logger.warn("prune_fail_open", {
+        error: result.failureReason ?? "unknown pruning error",
         durationMs: Date.now() - startedAt,
       });
     } else if (result.reason === "pruned") {
