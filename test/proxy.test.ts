@@ -332,6 +332,7 @@ describe("Anthropic proxy", () => {
       logger: silentLogger,
       startedAt: Date.now() - 42_000,
       stats,
+      version: "9.8.7-test",
     });
 
     const response = await request(app).get("/health");
@@ -339,7 +340,7 @@ describe("Anthropic proxy", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
       status: "ok",
-      proxy_version: "1.0.0",
+      proxy_version: "9.8.7-test",
       jev_configured: true,
       pruning_enabled: true,
       requests: 7,

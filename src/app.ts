@@ -7,6 +7,7 @@ import {
 } from "./middleware/proxy.js";
 import type { ProxyStats } from "./types.js";
 import type { AppLogger } from "./utils/logger.js";
+import { VERSION } from "./version.js";
 
 interface AppDependencies {
   config: Config;
@@ -15,6 +16,7 @@ interface AppDependencies {
   logger: AppLogger;
   startedAt: number;
   stats?: ProxyStats;
+  version?: string;
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -33,6 +35,7 @@ export function createApp(dependencies: AppDependencies): Express {
       config: dependencies.config,
       stats,
       startedAt: dependencies.startedAt,
+      version: dependencies.version ?? VERSION,
     }),
   );
   app.use(express.json({ limit: "32mb" }));

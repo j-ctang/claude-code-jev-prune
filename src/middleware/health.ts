@@ -6,6 +6,7 @@ interface HealthDependencies {
   config: Config;
   stats: ProxyStats;
   startedAt: number;
+  version: string;
 }
 
 export function createHealthHandler(
@@ -14,7 +15,7 @@ export function createHealthHandler(
   return (_request, response) => {
     response.status(200).json({
       status: "ok",
-      proxy_version: "1.0.0",
+      proxy_version: dependencies.version,
       jev_configured: Boolean(dependencies.config.jevApiKey),
       pruning_enabled: dependencies.config.pruningEnabled,
       requests: dependencies.stats.requests,
