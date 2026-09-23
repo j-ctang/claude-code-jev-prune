@@ -9,6 +9,11 @@ describe("loadConfig", () => {
     expect(config.triggerTokens).toBe(140_000);
     expect(config.targetTokens).toBe(80_000);
     expect(config.rescoreTokens).toBe(20_000);
+    expect(config.resumeNoticeTokens).toBe(60_000);
+    expect(config.statePath).toMatch(/\.claude\/jev-prune-state\.json$/);
+    expect(
+      loadConfig({ TYPESAFE_API_KEY: "secret", JEV_PRUNE_STATE_PATH: "" }).statePath,
+    ).toBe(config.statePath);
     expect(config.notify).toBe(true);
     expect(config.keepRecent).toBe(5);
     expect(config.jevModel).toBe("jev-latest");

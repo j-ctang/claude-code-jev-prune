@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import { PruneError, loggableReason } from "../errors.js";
+import type { PruneStateSnapshot, PruneStateStore } from "./pruneState.js";
 import type {
   AnthropicRequest,
   ContentBlock,
@@ -19,6 +20,7 @@ interface ContextPrunerOptions {
   logger?: AppLogger;
   maxCachedDrops?: number;
   now?: () => number;
+  stateStore?: PruneStateStore;
 }
 
 export interface PruneOptions {
@@ -95,6 +97,8 @@ export class ContextPruner {
   private readonly lastFullScoreTokens = new Map<string, number>();
   private readonly now: () => number;
   private readonly manualPrunes = new Map<string, number>();
+  private readonly seenSessions = new Map<string, true>();
+  private readonly stateStore: PruneStateStore | undefined;
 
   constructor(options: ContextPrunerOptions) {
     this.config = options.config;
@@ -102,6 +106,9 @@ export class ContextPruner {
     this.logger = options.logger;
     this.maxCachedDrops = options.maxCachedDrops ?? 10_000;
     this.now = options.now ?? Date.now;
+    this.stateStore = options.stateStore;
+    const saved = this.stateStore?.load();
+    if (saved) this.restore(saved);
   }
 
   /**
@@ -127,11 +134,16 @@ export class ContextPruner {
     if (!this.config.pruningEnabled) {
       return this.passThrough(request, beforeTokens, "disabled");
     }
+    const firstSeen = this.markSessionSeen(options.sessionId);
     const manual =
       this.takeManualPrune(request, options.sessionId) ||
       this.invokesManualCommand(request);
     if (!manual && beforeTokens < this.config.pruneThreshold) {
-      return this.passThrough(request, beforeTokens, "below-threshold");
+      return this.resumeNotice(
+        this.passThrough(request, beforeTokens, "below-threshold"),
+        request,
+        firstSeen,
+      );
     }
 
     // Earlier drops are re-applied on every request so the pruned prefix stays
@@ -176,12 +188,16 @@ export class ContextPruner {
       const cachedTokens = estimateTokens(cachedRequest);
 
       if (!manual && cachedTokens < this.config.pruneThreshold) {
-        return this.cachedOnly(
-          cachedRequest,
-          beforeTokens,
-          cachedTokens,
-          cachedIds.size,
-          "below-threshold",
+        return this.resumeNotice(
+          this.cachedOnly(
+            cachedRequest,
+            beforeTokens,
+            cachedTokens,
+            cachedIds.size,
+            "below-threshold",
+          ),
+          request,
+          firstSeen,
         );
       }
       // Pruning mid-task would cut context the agent is actively using, so new
@@ -281,6 +297,7 @@ export class ContextPruner {
           MAX_TRACKED_SESSIONS,
         );
       }
+      this.persist();
       const aboveTarget = afterTokens > this.config.targetTokens;
       const notice = this.notice(
         manual,
@@ -343,6 +360,79 @@ export class ContextPruner {
       if (role === "user" || role === "assistant") return index;
     }
     return -1;
+  }
+
+  private restore(saved: PruneStateSnapshot): void {
+    for (const key of saved.drops) {
+      remember(this.dropCache, key, true, this.maxCachedDrops);
+    }
+    for (const key of saved.keeps) {
+      remember(this.keepCache, key, true, this.maxCachedDrops);
+    }
+    for (const [session, tokens] of saved.lastFullScoreTokens) {
+      remember(this.lastFullScoreTokens, session, tokens, MAX_TRACKED_SESSIONS);
+    }
+    for (const session of saved.seenSessions) {
+      remember(this.seenSessions, session, true, MAX_TRACKED_SESSIONS);
+    }
+  }
+
+  private persist(): void {
+    if (!this.stateStore) return;
+    try {
+      this.stateStore.save({
+        drops: [...this.dropCache.keys()],
+        keeps: [...this.keepCache.keys()],
+        lastFullScoreTokens: [...this.lastFullScoreTokens.entries()],
+        seenSessions: [...this.seenSessions.keys()],
+      });
+    } catch (error) {
+      this.logger?.warn("prune_state_save_failed", {
+        error: loggableReason(error),
+      });
+    }
+  }
+
+  /** Returns true the first time this proxy (across restarts) sees a session. */
+  private markSessionSeen(sessionId: string | undefined): boolean {
+    if (sessionId === undefined) return false;
+    if (this.seenSessions.has(sessionId)) return false;
+    remember(this.seenSessions, sessionId, true, MAX_TRACKED_SESSIONS);
+    this.persist();
+    return true;
+  }
+
+  /**
+   * A session seen for the first time that already has history is a resumed
+   * conversation. Its prompt cache has expired, so pruning now is free; below
+   * the automatic threshold, suggest /jev-prune instead of pruning unasked.
+   */
+  private resumeNotice(
+    result: PruneResult,
+    request: AnthropicRequest,
+    firstSeen: boolean,
+  ): PruneResult {
+    if (
+      !firstSeen ||
+      this.config.resumeNoticeTokens <= 0 ||
+      result.afterTokens < this.config.resumeNoticeTokens ||
+      !this.isNewUserTurn(request) ||
+      !request.messages.some((message) => message.role === "assistant")
+    ) {
+      return result;
+    }
+    const notice =
+      `[jev-prune] This is a continued conversation at ~${Math.round(result.afterTokens / 1000)}K tokens. ` +
+      `Automatic pruning starts at ~${Math.round(this.config.pruneThreshold / 1000)}K. ` +
+      "Tell the user in one short line that they can run /jev-prune to trim stale tool results now.";
+    return {
+      ...result,
+      resumed: true,
+      notice,
+      request: this.config.notify
+        ? this.appendNotice(result.request, notice)
+        : result.request,
+    };
   }
 
   private nothingToPrune(result: PruneResult, manual: boolean): PruneResult {

@@ -81,6 +81,8 @@ function testConfig(
     triggerTokens: 1_000_000,
     targetTokens: 0,
     rescoreTokens: 0,
+    resumeNoticeTokens: 0,
+    statePath: "/nonexistent/jev-prune-state.json",
     notify: false,
     keepRecent: 0,
     excludeTools: new Set(),

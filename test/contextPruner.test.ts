@@ -1,6 +1,10 @@
 import type { Config } from "../src/config.js";
 import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
+import type {
+  PruneStateSnapshot,
+  PruneStateStore,
+} from "../src/services/pruneState.js";
 import { estimateTokens } from "../src/utils/tokenCounter.js";
 import type {
   AnthropicRequest,
@@ -23,6 +27,8 @@ function config(overrides: Partial<Config> = {}): Config {
     triggerTokens: 1_000_000,
     targetTokens: 0,
     rescoreTokens: 0,
+    resumeNoticeTokens: 0,
+    statePath: "/nonexistent/jev-prune-state.json",
     notify: false,
     keepRecent: 0,
     excludeTools: new Set(),
@@ -622,6 +628,121 @@ describe("ContextPruner", () => {
         ["call-old", "call-new"],
         ["call-old", "call-new", "call-3"],
       ]);
+    });
+  });
+
+  describe("state across restarts", () => {
+    function memoryStore(): PruneStateStore & { saved?: PruneStateSnapshot } {
+      const store: PruneStateStore & { saved?: PruneStateSnapshot } = {
+        load: () => store.saved,
+        save(snapshot) {
+          store.saved = clone(snapshot);
+        },
+      };
+      return store;
+    }
+
+    test("re-applies earlier drops after a restart without scoring", async () => {
+      const store = memoryStore();
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const scorer = scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed);
+      const before = new ContextPruner({ config: config(), scorer, stateStore: store });
+      await before.prune(twoToolRequest, { sessionId: "s" });
+
+      const after = new ContextPruner({ config: config(), scorer, stateStore: store });
+      const midTask = clone(twoToolRequest);
+      midTask.messages.pop();
+      const result = await after.prune(midTask, { sessionId: "s" });
+
+      expect(allToolUseIds(result.request)).toEqual(["call-new"]);
+      expect(observed.batches).toHaveLength(1);
+    });
+
+    test("keeps working when the state cannot be saved", async () => {
+      const warnings: string[] = [];
+      const pruner = new ContextPruner({
+        config: config(),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+        logger: {
+          info: () => undefined,
+          error: () => undefined,
+          debug: () => undefined,
+          warn: (message) => warnings.push(message),
+        },
+        stateStore: {
+          load: () => undefined,
+          save() {
+            throw new Error("disk full at /secret/path");
+          },
+        },
+      });
+
+      const result = await pruner.prune(twoToolRequest, { sessionId: "s" });
+
+      expect(result.reason).toBe("pruned");
+      expect(warnings).toContain("prune_state_save_failed");
+    });
+  });
+
+  describe("resume notice", () => {
+    const resumeConfig = {
+      pruneThreshold: 1_000_000,
+      triggerTokens: 1_000_000,
+      resumeNoticeTokens: 1,
+      notify: true,
+    };
+
+    test("suggests /jev-prune once when a conversation is resumed", async () => {
+      const pruner = new ContextPruner({
+        config: config(resumeConfig),
+        scorer: scorerReturning({}),
+      });
+
+      const first = await pruner.prune(twoToolRequest, { sessionId: "s" });
+      const second = await pruner.prune(twoToolRequest, { sessionId: "s" });
+
+      expect(first.resumed).toBe(true);
+      expect(first.notice).toMatch(/continued conversation .* run \/jev-prune/);
+      expect(JSON.stringify(first.request.messages.at(-1))).toContain(
+        "continued conversation",
+      );
+      expect(second.resumed).toBeUndefined();
+      expect(second.request).toBe(twoToolRequest);
+    });
+
+    test("stays quiet for new, small, or already-seen conversations", async () => {
+      const store: PruneStateStore = {
+        load: () => ({
+          drops: [],
+          keeps: [],
+          lastFullScoreTokens: [],
+          seenSessions: ["seen-before-restart"],
+        }),
+        save: () => undefined,
+      };
+      const pruner = new ContextPruner({
+        config: config(resumeConfig),
+        scorer: scorerReturning({}),
+        stateStore: store,
+      });
+      const small = new ContextPruner({
+        config: config({ ...resumeConfig, resumeNoticeTokens: 999_999 }),
+        scorer: scorerReturning({}),
+      });
+      const brandNew = {
+        ...twoToolRequest,
+        messages: [{ role: "user" as const, content: "Start a new task." }],
+      };
+
+      const fresh = await pruner.prune(brandNew, { sessionId: "new" });
+      const seen = await pruner.prune(twoToolRequest, {
+        sessionId: "seen-before-restart",
+      });
+      const tiny = await small.prune(twoToolRequest, { sessionId: "s" });
+
+      expect(fresh.resumed).toBeUndefined();
+      expect(seen.resumed).toBeUndefined();
+      expect(tiny.resumed).toBeUndefined();
     });
   });
 

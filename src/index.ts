@@ -4,6 +4,7 @@ import { createApp } from "./app.js";
 import { loadConfig, type Config } from "./config.js";
 import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
+import { createFileStateStore } from "./services/pruneState.js";
 import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
 
@@ -20,7 +21,12 @@ function start(
     timeoutMs: config.jevTimeoutMs,
     fetchFn: fetch,
   });
-  const pruner = new ContextPruner({ config, scorer, logger });
+  const pruner = new ContextPruner({
+    config,
+    scorer,
+    logger,
+    stateStore: createFileStateStore(config.statePath),
+  });
   const upstreamAbort = new AbortController();
   const app = createApp({
     config,
