@@ -1,7 +1,10 @@
 import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createFileStateStore } from "../src/services/pruneState.js";
+import {
+  createFileStateStore,
+  type Rewrite,
+} from "../src/services/pruneState.js";
 
 async function statePath(): Promise<string> {
   const directory = await mkdtemp(join(tmpdir(), "jev-prune-state-"));
@@ -14,6 +17,10 @@ test("saves and loads a snapshot with owner-only permissions", async () => {
   const snapshot = {
     drops: ["drop-a"],
     keeps: ["keep-a"],
+    rewrites: [
+      ["stub-a", { kind: "stub", text: "[jev-prune] Output removed." }],
+      ["trim-a", { kind: "trim", keepTokens: 2_000 }],
+    ] as Array<[string, Rewrite]>,
     lastFullScoreTokens: [["session-a", 95_000]] as Array<[string, number]>,
     seenSessions: ["session-a"],
   };
@@ -30,7 +37,13 @@ test("ignores missing, corrupt, and unknown-version state files", async () => {
   const store = createFileStateStore(path);
 
   expect(store.load()).toBeUndefined();
-  store.save({ drops: [], keeps: [], lastFullScoreTokens: [], seenSessions: [] });
+  store.save({
+    drops: [],
+    keeps: [],
+    rewrites: [],
+    lastFullScoreTokens: [],
+    seenSessions: [],
+  });
   await writeFile(path, "{not json");
   expect(store.load()).toBeUndefined();
   await writeFile(path, JSON.stringify({ version: 99, drops: ["x"] }));

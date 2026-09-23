@@ -29,6 +29,11 @@ function config(overrides: Partial<Config> = {}): Config {
     rescoreTokens: 0,
     resumeNoticeTokens: 0,
     statePath: "/nonexistent/jev-prune-state.json",
+    supersede: false,
+    trim: false,
+    trimTools: new Set(["Bash"]),
+    trimMinTokens: 10_000,
+    trimKeepTokens: 2_000,
     notify: false,
     keepRecent: 0,
     excludeTools: new Set(),
@@ -684,6 +689,187 @@ describe("ContextPruner", () => {
     });
   });
 
+  describe("superseded and trimmed outputs", () => {
+    interface Pair {
+      id: string;
+      name: string;
+      input: Record<string, unknown>;
+      output: string;
+    }
+    const bigLog = Array.from({ length: 5_000 }, (_, index) => `log line ${index}`).join("\n");
+    const conversation = (pairs: Pair[], lastText = "Next step."): AnthropicRequest => ({
+      model: "claude-sonnet-4-5",
+      messages: [
+        { role: "user", content: "Fix the auth bug." },
+        ...pairs.flatMap((pair, index) => [
+          {
+            role: "assistant" as const,
+            content: [contentBlock({ type: "tool_use", id: pair.id, name: pair.name, input: pair.input })],
+          },
+          {
+            role: "user" as const,
+            content: [
+              contentBlock({
+                type: "tool_result",
+                tool_use_id: pair.id,
+                content: pair.output,
+                is_error: false,
+                ...(index === pairs.length - 1
+                  ? { cache_control: { type: "ephemeral" } }
+                  : {}),
+              }),
+            ],
+          },
+        ]),
+        ...(lastText ? [{ role: "user" as const, content: lastText }] : []),
+      ],
+    });
+    const resultBlock = (request: AnthropicRequest, id: string) =>
+      request.messages
+        .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
+        .find((block) => block.type === "tool_result" && block.tool_use_id === id);
+    const pairs: Pair[] = [
+      { id: "read-1", name: "Read", input: { file_path: "src/auth.ts" }, output: "1\told" },
+      { id: "bash-big", name: "Bash", input: { command: "npm test" }, output: bigLog },
+      { id: "read-2", name: "Read", input: { file_path: "src/auth.ts" }, output: "1\tnew" },
+    ];
+    const rewriteConfig = (overrides: Partial<Config> = {}) =>
+      config({
+        supersede: true,
+        trim: true,
+        trimMinTokens: 1_000,
+        trimKeepTokens: 100,
+        keepRecent: 1,
+        notify: true,
+        targetTokens: 1_000_000_000,
+        ...overrides,
+      });
+
+    test("stubs superseded output, trims large output, and scores the rest", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: rewriteConfig(),
+        scorer: scorerReturning({ "bash-big": 0.9 }, observed),
+      });
+
+      const result = await pruner.prune(conversation(pairs));
+
+      expect(result.reason).toBe("pruned");
+      expect(result.superseded).toBe(1);
+      expect(result.trimmed).toBe(1);
+      expect(resultBlock(result.request, "read-1")).toEqual({
+        type: "tool_result",
+        tool_use_id: "read-1",
+        content: "[jev-prune] Output removed: superseded by a later Read of src/auth.ts.",
+        is_error: false,
+      });
+      const trimmed = resultBlock(result.request, "bash-big")?.content as string;
+      expect(trimmed).toMatch(/Trimmed [\d,]+ lines/);
+      expect(trimmed.length).toBeLessThan(1_000);
+      expect(resultBlock(result.request, "read-2")).toEqual(
+        resultBlock(conversation(pairs), "read-2"),
+      );
+      expect(observed.batches.map((batch) => batch.map((candidate) => candidate.toolUseId))).toEqual([
+        ["bash-big"],
+      ]);
+      expect(observed.batches[0]?.[0]?.result).toBe(trimmed);
+      expect(result.notice).toMatch(
+        /replaced 1 superseded output\(s\) with a stub, trimmed 1 large output\(s\)/,
+      );
+    });
+
+    test("stubs even the protected newest pairs and keeps cache_control", async () => {
+      const pruner = new ContextPruner({
+        config: rewriteConfig({ keepRecent: 5 }),
+        scorer: scorerReturning({}),
+      });
+      const recent: Pair[] = [
+        { id: "bash-1", name: "Bash", input: { command: "ls" }, output: "a" },
+        { id: "bash-2", name: "Bash", input: { command: "ls" }, output: "a b" },
+      ];
+      const request = conversation(recent);
+      const block = resultBlock(request, "bash-2");
+      if (block) block.cache_control = undefined;
+      const first = resultBlock(request, "bash-1");
+      if (first) first.cache_control = { type: "ephemeral" };
+
+      const result = await pruner.prune(request);
+
+      expect(resultBlock(result.request, "bash-1")).toMatchObject({
+        content: "[jev-prune] Output removed: superseded by a later run of the same command.",
+        cache_control: { type: "ephemeral" },
+      });
+      expect(result.trimmed).toBe(0);
+    });
+
+    test("re-applies rewrites mid-task, after a Jev failure, and after a restart", async () => {
+      let saved: PruneStateSnapshot | undefined;
+      const store: PruneStateStore = {
+        load: () => saved,
+        save: (snapshot) => {
+          saved = clone(snapshot);
+        },
+      };
+      const failing: RelevanceScorer = {
+        async score() {
+          throw new PruneError("timeout");
+        },
+      };
+      const pruner = new ContextPruner({
+        config: rewriteConfig(),
+        scorer: failing,
+        stateStore: store,
+      });
+
+      const failed = await pruner.prune(conversation(pairs));
+      const restarted = new ContextPruner({
+        config: rewriteConfig(),
+        scorer: scorerReturning({}),
+        stateStore: store,
+      });
+      const midTask = await restarted.prune(conversation(pairs, ""));
+
+      expect(failed.reason).toBe("fail-open");
+      expect(resultBlock(failed.request, "read-1")?.content).toMatch(/superseded/);
+      expect(resultBlock(failed.request, "bash-big")?.content).toMatch(/Trimmed/);
+      expect(midTask.reason).toBe("mid-task");
+      expect(resultBlock(midTask.request, "read-1")?.content).toMatch(/superseded/);
+      expect(resultBlock(midTask.request, "bash-big")?.content).toBe(
+        resultBlock(failed.request, "bash-big")?.content,
+      );
+    });
+
+    test("leaves excluded tools, Read output, and disabled features alone", async () => {
+      const readBig: Pair[] = [
+        { id: "read-big", name: "Read", input: { file_path: "big.ts" }, output: bigLog },
+        ...pairs.slice(2),
+      ];
+      const excluded = new ContextPruner({
+        config: rewriteConfig({ excludeTools: new Set(["Read", "Bash"]) }),
+        scorer: scorerReturning({}),
+      });
+      const readOnly = new ContextPruner({
+        config: rewriteConfig({ trimTools: new Set(["Bash"]) }),
+        scorer: scorerReturning({ "read-big": 0.9 }),
+      });
+      const disabled = new ContextPruner({
+        config: rewriteConfig({ supersede: false, trim: false }),
+        scorer: scorerReturning({ "read-1": 0.9, "bash-big": 0.9 }),
+      });
+
+      const excludedResult = await excluded.prune(conversation(pairs));
+      const readResult = await readOnly.prune(conversation(readBig));
+      const disabledResult = await disabled.prune(conversation(pairs));
+
+      expect(excludedResult.superseded ?? 0).toBe(0);
+      expect(readResult.trimmed).toBe(0);
+      expect(resultBlock(readResult.request, "read-big")?.content).toBe(bigLog);
+      expect(disabledResult.superseded).toBe(0);
+      expect(disabledResult.trimmed).toBe(0);
+      expect(resultBlock(disabledResult.request, "bash-big")?.content).toBe(bigLog);
+    });
+  });
+
   describe("resume notice", () => {
     const resumeConfig = {
       pruneThreshold: 1_000_000,
@@ -715,6 +901,7 @@ describe("ContextPruner", () => {
         load: () => ({
           drops: [],
           keeps: [],
+          rewrites: [],
           lastFullScoreTokens: [],
           seenSessions: ["seen-before-restart"],
         }),
@@ -812,6 +999,28 @@ describe("ContextPruner", () => {
       expect(plain.manual).toBe(true);
       expect(plugin.manual).toBe(true);
       expect(other.reason).toBe("below-threshold");
+    });
+
+    test("keeps a below-threshold prune applied on later requests", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: config(highThreshold),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
+      });
+      pruner.requestManualPrune("session-a");
+      await pruner.prune(twoToolRequest, { sessionId: "session-a" });
+      const midTask = clone(twoToolRequest);
+      midTask.messages.pop();
+
+      const nextTurn = await pruner.prune(clone(twoToolRequest), {
+        sessionId: "session-a",
+      });
+      const during = await pruner.prune(midTask, { sessionId: "session-a" });
+
+      expect(allToolUseIds(nextTurn.request)).toEqual(["call-new"]);
+      expect(nextTurn.reason).toBe("below-threshold");
+      expect(allToolUseIds(during.request)).toEqual(["call-new"]);
+      expect(observed.batches).toHaveLength(1);
     });
 
     test("waits for a new user turn before running", async () => {
