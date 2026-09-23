@@ -2,6 +2,7 @@ module.exports = {
   preset: "ts-jest/presets/default-esm",
   extensionsToTreatAsEsm: [".ts"],
   testEnvironment: "node",
+  modulePathIgnorePatterns: ["<rootDir>/.worktrees/"],
   testMatch: ["<rootDir>/test/**/*.test.ts"],
   transform: {
     "^.+\\.tsx?$": [

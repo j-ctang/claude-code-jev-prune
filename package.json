@@ -12,7 +12,7 @@
     "test:watch": "jest --watch",
     "lint": "eslint . --ext .ts",
     "format": "prettier --write \"{src,test}/**/*.ts\" \"*.{json,md}\"",
-    "check": "npm run lint && npm test && npm run build",
+    "check": "npm run lint && npm run build && npm test",
     "clean": "rm -rf dist"
   },
   "keywords": [
