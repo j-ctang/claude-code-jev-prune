@@ -9,6 +9,7 @@ import type {
   ProxyStats,
 } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
+import { createUsageTap } from "../utils/usageTap.js";
 
 interface RequestPruner {
   prune(request: AnthropicRequest): Promise<PruneResult>;
@@ -179,6 +180,22 @@ async function forward(
   const stream = Readable.fromWeb(
     upstream.body as unknown as NodeReadableStream<Uint8Array>,
   );
+  if (request.method === "POST" && path === "/v1/messages") {
+    const tap = createUsageTap(
+      upstream.headers.get("content-type") ?? "",
+      (usage) => {
+        dependencies.logger.info("anthropic_usage", {
+          status: upstream.status,
+          inputTokens: usage.inputTokens,
+          cacheReadInputTokens: usage.cacheReadInputTokens,
+          cacheCreationInputTokens: usage.cacheCreationInputTokens,
+          totalInputTokens: usage.totalInputTokens,
+        });
+      },
+    );
+    await pipeline(stream, tap, response);
+    return;
+  }
   await pipeline(stream, response);
 }
 
