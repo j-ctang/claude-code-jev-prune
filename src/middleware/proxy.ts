@@ -141,6 +141,10 @@ async function forward(
         error: result.failureReason ?? "unknown pruning error",
         durationMs: Date.now() - startedAt,
       });
+    } else if (result.resumed) {
+      dependencies.logger.info("resume_notice", {
+        tokens: result.afterTokens,
+      });
     } else if (result.reason === "pruned") {
       dependencies.logger.info("prune_complete", {
         beforeTokens: result.beforeTokens,

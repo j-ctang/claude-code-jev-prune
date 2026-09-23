@@ -1,3 +1,6 @@
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 export interface Config {
   port: number;
   pruningEnabled: boolean;
@@ -5,6 +8,8 @@ export interface Config {
   triggerTokens: number;
   targetTokens: number;
   rescoreTokens: number;
+  resumeNoticeTokens: number;
+  statePath: string;
   notify: boolean;
   keepRecent: number;
   excludeTools: ReadonlySet<string>;
@@ -95,6 +100,14 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       "JEV_PRUNE_RESCORE_TOKENS",
       0,
     ),
+    resumeNoticeTokens: parseInteger(
+      env.JEV_PRUNE_RESUME_NOTICE_TOKENS ?? "60000",
+      "JEV_PRUNE_RESUME_NOTICE_TOKENS",
+      0,
+    ),
+    statePath:
+      env.JEV_PRUNE_STATE_PATH ||
+      join(homedir(), ".claude", "jev-prune-state.json"),
     notify: parseBoolean(env.JEV_PRUNE_NOTIFY ?? "true", "JEV_PRUNE_NOTIFY"),
     keepRecent: parseInteger(
       env.JEV_PRUNE_KEEP_RECENT ?? "5",

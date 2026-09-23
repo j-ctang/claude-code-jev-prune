@@ -72,6 +72,8 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failu
 | `JEV_PRUNE_TRIGGER_TOKENS` | `140000` | Estimated tokens at which the aggressive cutoff is used. |
 | `JEV_PRUNE_TARGET_TOKENS` | `80000` | Size a prune aims for. Above it, the proxy warns and suggests a handoff. |
 | `JEV_PRUNE_RESCORE_TOKENS` | `20000` | Growth since the last full scoring before kept tool results are scored again. |
+| `JEV_PRUNE_RESUME_NOTICE_TOKENS` | `60000` | A resumed conversation at or above this size (and below the threshold) gets a one-time `/jev-prune` suggestion. `0` disables it. |
+| `JEV_PRUNE_STATE_PATH` | `~/.claude/jev-prune-state.json` | Where pruning decisions are saved so they survive a proxy restart. |
 | `JEV_PRUNE_NOTIFY` | `true` | Appends a one-line pruning notice to the new user turn so Claude can tell the user. |
 | `JEV_PRUNE_KEEP_RECENT` | `5` | Number of newest matched tool pairs never evaluated or removed. |
 | `JEV_PRUNE_EXCLUDE_TOOLS` | empty | Comma-separated tool names never evaluated or removed. |
@@ -119,6 +121,12 @@ curl -X POST http://127.0.0.1:5590/jev-prune/prune-next \
 ```
 
 The session is matched against Claude Code's `x-claude-code-session-id` request header. Queued requests expire after ten minutes.
+
+## Restarts and Resumed Conversations
+
+Drop and keep decisions, the size at each session's last full scoring, and the sessions already seen are saved to `JEV_PRUNE_STATE_PATH` (mode `0600`). The file stores hashed fingerprints and Claude Code session IDs, never message content. After a restart, earlier drops are re-applied, so live conversations keep their pruned history and prompt cache.
+
+A session the proxy has never seen that already has history is a resumed conversation, and its prompt cache has expired, so pruning costs no cache discount. At or above `JEV_PRUNE_THRESHOLD`, it is pruned automatically as usual. Between `JEV_PRUNE_RESUME_NOTICE_TOKENS` and the threshold, the proxy attaches a one-time note, and Claude suggests running `/jev-prune`.
 
 ## Privacy Boundary
 
