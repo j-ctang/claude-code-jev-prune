@@ -1,7 +1,7 @@
 {
   "name": "claude-code-jev-prune",
   "version": "1.0.0",
-  "description": "MCP plugin for Claude Code: intelligent context pruning with TypeSafe Jev",
+  "description": "Jev Prune: lossless context pruning, compaction and filtering for Claude Code",
   "main": "dist/index.js",
   "type": "module",
   "scripts": {
@@ -22,7 +22,13 @@
     "context-pruning",
     "tokens",
     "optimization",
-    "anthropic"
+    "anthropic",
+    "jev-prune",
+    "jev-compact",
+    "context-compaction",
+    "context-filtering",
+    "claude-code-plugin",
+    "token-optimization"
   ],
   "author": "j-ctang",
   "license": "MIT",
