@@ -77,8 +77,8 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failu
 | `JEV_PRUNE_SUPERSEDE` | `true` | Replace tool output made out of date by a later call with a one-line stub. |
 | `JEV_PRUNE_TRIM` | `true` | Trim very large outputs Claude has already seen. |
 | `JEV_PRUNE_TRIM_TOOLS` | `Bash` | Comma-separated tools eligible for trimming. `Read` is never trimmed. |
-| `JEV_PRUNE_TRIM_MIN_TOKENS` | `5000` | Outputs larger than this are trimmed. Claude Code already shortens Bash output over ~30K characters (~7.5K tokens), so this sits below that. |
-| `JEV_PRUNE_TRIM_KEEP_TOKENS` | `1000` | Tokens kept at the start and again at the end of a trimmed output. Must be less than half of the minimum. |
+| `JEV_PRUNE_TRIM_MIN_TOKENS` | `10000` | Outputs larger than this are trimmed. |
+| `JEV_PRUNE_TRIM_KEEP_TOKENS` | `2000` | Tokens kept at the start and again at the end of a trimmed output. Must be less than half of the minimum. |
 | `JEV_PRUNE_NOTIFY` | `true` | Appends a one-line pruning notice to the new user turn so Claude can tell the user. |
 | `JEV_PRUNE_KEEP_RECENT` | `5` | Number of newest matched tool pairs never evaluated or removed. |
 | `JEV_PRUNE_EXCLUDE_TOOLS` | empty | Comma-separated tool names never evaluated or removed. |

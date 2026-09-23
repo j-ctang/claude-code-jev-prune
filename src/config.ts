@@ -91,12 +91,12 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     );
   }
   const trimMinTokens = parseInteger(
-    env.JEV_PRUNE_TRIM_MIN_TOKENS ?? "5000",
+    env.JEV_PRUNE_TRIM_MIN_TOKENS ?? "10000",
     "JEV_PRUNE_TRIM_MIN_TOKENS",
     1,
   );
   const trimKeepTokens = parseInteger(
-    env.JEV_PRUNE_TRIM_KEEP_TOKENS ?? "1000",
+    env.JEV_PRUNE_TRIM_KEEP_TOKENS ?? "2000",
     "JEV_PRUNE_TRIM_KEEP_TOKENS",
     1,
   );
@@ -134,8 +134,6 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     ),
     trim: parseBoolean(env.JEV_PRUNE_TRIM ?? "true", "JEV_PRUNE_TRIM"),
     // Read results are never trimmed: Claude needs file contents to edit.
-    // Claude Code already replaces Bash output over ~30K characters (~7.5K
-    // tokens) with a short preview, so the trim defaults sit below that.
     trimTools: new Set(
       (env.JEV_PRUNE_TRIM_TOOLS ?? "Bash")
         .split(",")

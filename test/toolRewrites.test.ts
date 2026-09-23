@@ -112,11 +112,10 @@ describe("trimOutput", () => {
     }
   });
 
-  test("cuts a single very long line by characters", () => {
+  test("leaves a single very long line intact rather than splitting it", () => {
     const result = trimOutput("y".repeat(10_000), 100);
 
-    expect(result?.removedLines).toBe(0);
-    expect((result?.content as string).length).toBeLessThan(1_000);
+    expect(result).toBeUndefined();
   });
 
   test("keeps block fields for text-block output and skips other outputs", () => {

@@ -13,8 +13,8 @@ describe("loadConfig", () => {
     expect(config.supersede).toBe(true);
     expect(config.trim).toBe(true);
     expect([...config.trimTools]).toEqual(["Bash"]);
-    expect(config.trimMinTokens).toBe(5_000);
-    expect(config.trimKeepTokens).toBe(1_000);
+    expect(config.trimMinTokens).toBe(10_000);
+    expect(config.trimKeepTokens).toBe(2_000);
     expect(config.statePath).toMatch(/\.claude\/jev-prune-state\.json$/);
     expect(
       loadConfig({ TYPESAFE_API_KEY: "secret", JEV_PRUNE_STATE_PATH: "" }).statePath,

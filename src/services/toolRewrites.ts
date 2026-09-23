@@ -112,7 +112,7 @@ export interface TrimResult {
 
 /**
  * Keeps about `keepTokens` at the start and end of a text output and replaces
- * the middle with a marker. Cuts fall on line breaks when the output has them.
+ * the middle with a marker. Cuts always fall on line breaks.
  * Returns undefined when the output is not text or has nothing to cut.
  */
 export function trimOutput(
@@ -144,24 +144,14 @@ export function trimOutput(
     tailCount += 1;
   }
 
-  let head: string;
-  let tail: string;
-  let removedLines: number;
-  if (headCount === 0 || tailCount === 0) {
-    // One very long line: cut by characters instead.
-    head = text.slice(0, keepChars);
-    tail = text.slice(-keepChars);
-    removedLines = 0;
-  } else {
-    head = lines.slice(0, headCount).join("\n");
-    tail = lines.slice(lines.length - tailCount).join("\n");
-    removedLines = lines.length - headCount - tailCount;
+  if (headCount === 0 || tailCount === 0 || headCount + tailCount >= lines.length) {
+    return undefined;
   }
+  const head = lines.slice(0, headCount).join("\n");
+  const tail = lines.slice(lines.length - tailCount).join("\n");
+  const removedLines = lines.length - headCount - tailCount;
   const removedTokens = estimateTokens(text) - estimateTokens(head + tail);
-  const what =
-    removedLines > 0
-      ? `${removedLines.toLocaleString("en-US")} lines (~${Math.round(removedTokens / 1000)}K tokens)`
-      : `~${Math.round(removedTokens / 1000)}K tokens`;
+  const what = `${removedLines.toLocaleString("en-US")} lines (~${Math.round(removedTokens / 1000)}K tokens)`;
   const trimmed =
     `${head}\n\n[jev-prune] Trimmed ${what} from the middle of this output. ` +
     `Re-run the command to see it in full.\n\n${tail}`;
