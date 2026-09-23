@@ -4,7 +4,10 @@ import { createApp } from "./app.js";
 import { loadConfig, type Config } from "./config.js";
 import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
+import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
+
+const SHUTDOWN_TIMEOUT_MS = 5_000;
 
 function start(
   config: Config,
@@ -18,12 +21,14 @@ function start(
     fetchFn: fetch,
   });
   const pruner = new ContextPruner({ config, scorer, logger });
+  const upstreamAbort = new AbortController();
   const app = createApp({
     config,
     pruner,
     fetchFn: fetch,
     logger,
     startedAt: Date.now(),
+    upstreamSignal: upstreamAbort.signal,
   });
   const server = createServer(app);
   let shuttingDown = false;
@@ -43,16 +48,22 @@ function start(
     if (shuttingDown) return;
     shuttingDown = true;
     logger.info("proxy_stopping", { signal });
-    server.close((error) => {
-      if (error) {
-        logger.error("proxy_shutdown_failed", { error: error.message });
-        process.exitCode = 1;
-      } else {
+    void shutdownServer(server, {
+      timeoutMs: SHUTDOWN_TIMEOUT_MS,
+      logger,
+      onForce: () => upstreamAbort.abort(),
+    })
+      .then(() => {
         logger.info("proxy_stopped");
         process.exitCode = 0;
-      }
-      logger.end();
-    });
+      })
+      .catch((error: unknown) => {
+        logger.error("proxy_shutdown_failed", {
+          error: error instanceof Error ? error.message : "unknown error",
+        });
+        process.exitCode = 1;
+      })
+      .finally(() => logger.end());
   };
 
   process.on("SIGINT", shutdown);

@@ -20,6 +20,7 @@ export interface ProxyDependencies {
   fetchFn: typeof fetch;
   logger: AppLogger;
   stats: ProxyStats;
+  upstreamSignal?: AbortSignal;
 }
 
 const REQUEST_HEADER_BLOCKLIST = new Set([
@@ -155,6 +156,9 @@ async function forward(
         method: request.method,
         headers,
         ...(serializedBody !== undefined ? { body: serializedBody } : {}),
+        ...(dependencies.upstreamSignal
+          ? { signal: dependencies.upstreamSignal }
+          : {}),
       },
     );
   } catch (error) {
