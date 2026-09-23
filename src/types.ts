@@ -75,6 +75,7 @@ export interface PruneResult {
     | "pruned"
     | "fail-open";
   failureReason?: string;
+  manual?: boolean;
   aboveTarget?: boolean;
   notice?: string;
 }

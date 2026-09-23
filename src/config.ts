@@ -4,6 +4,7 @@ export interface Config {
   pruneThreshold: number;
   triggerTokens: number;
   targetTokens: number;
+  rescoreTokens: number;
   notify: boolean;
   keepRecent: number;
   excludeTools: ReadonlySet<string>;
@@ -89,6 +90,11 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     pruneThreshold,
     triggerTokens,
     targetTokens,
+    rescoreTokens: parseInteger(
+      env.JEV_PRUNE_RESCORE_TOKENS ?? "20000",
+      "JEV_PRUNE_RESCORE_TOKENS",
+      0,
+    ),
     notify: parseBoolean(env.JEV_PRUNE_NOTIFY ?? "true", "JEV_PRUNE_NOTIFY"),
     keepRecent: parseInteger(
       env.JEV_PRUNE_KEEP_RECENT ?? "5",

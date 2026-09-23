@@ -18,7 +18,34 @@ interface ContextPrunerOptions {
   scorer: RelevanceScorer;
   logger?: AppLogger;
   maxCachedDrops?: number;
+  now?: () => number;
 }
+
+export interface PruneOptions {
+  sessionId?: string;
+}
+
+// Claude Code wraps an invoked slash command as `<command-name>/name</command-name>`.
+// Plugin commands are namespaced, e.g. `/jev-prune:jev-prune`.
+const MANUAL_COMMAND = /<command-name>\/(?:[\w-]+:)?jev-prune<\/command-name>/;
+
+const DEFAULT_SESSION = "default";
+const MAX_TRACKED_SESSIONS = 1_000;
+
+/** Inserts or refreshes `key` as most recent, evicting the oldest past `max`. */
+function remember<V>(map: Map<string, V>, key: string, value: V, max: number) {
+  if (max <= 0) return;
+  map.delete(key);
+  map.set(key, value);
+  while (map.size > max) {
+    const oldest = map.keys().next().value as string | undefined;
+    if (oldest === undefined) return;
+    map.delete(oldest);
+  }
+}
+
+const MANUAL_PRUNE_TTL_MS = 10 * 60 * 1000;
+const MAX_PENDING_MANUAL_PRUNES = 1_000;
 
 interface LocatedToolUse {
   messageIndex: number;
@@ -64,20 +91,46 @@ export class ContextPruner {
   private readonly logger: AppLogger | undefined;
   private readonly maxCachedDrops: number;
   private readonly dropCache = new Map<string, true>();
+  private readonly keepCache = new Map<string, true>();
+  private readonly lastFullScoreTokens = new Map<string, number>();
+  private readonly now: () => number;
+  private readonly manualPrunes = new Map<string, number>();
 
   constructor(options: ContextPrunerOptions) {
     this.config = options.config;
     this.scorer = options.scorer;
     this.logger = options.logger;
     this.maxCachedDrops = options.maxCachedDrops ?? 10_000;
+    this.now = options.now ?? Date.now;
   }
 
-  async prune(request: AnthropicRequest): Promise<PruneResult> {
+  /**
+   * Queues a prune for the session's next new user turn, even below the
+   * automatic threshold. Pending requests expire after ten minutes.
+   */
+  requestManualPrune(sessionId: string): void {
+    this.manualPrunes.delete(sessionId);
+    this.manualPrunes.set(sessionId, this.now() + MANUAL_PRUNE_TTL_MS);
+    while (this.manualPrunes.size > MAX_PENDING_MANUAL_PRUNES) {
+      const oldest = this.manualPrunes.keys().next().value as
+        string | undefined;
+      if (oldest === undefined) break;
+      this.manualPrunes.delete(oldest);
+    }
+  }
+
+  async prune(
+    request: AnthropicRequest,
+    options: PruneOptions = {},
+  ): Promise<PruneResult> {
     const beforeTokens = estimateTokens(request);
     if (!this.config.pruningEnabled) {
       return this.passThrough(request, beforeTokens, "disabled");
     }
-    if (beforeTokens < this.config.pruneThreshold) {
+    const manual =
+      this.takeManualPrune(request, options.sessionId) ||
+      this.invokesManualCommand(request);
+    if (!manual && beforeTokens < this.config.pruneThreshold) {
       return this.passThrough(request, beforeTokens, "below-threshold");
     }
 
@@ -88,7 +141,10 @@ export class ContextPruner {
     try {
       const candidates = this.extractCandidates(request);
       if (candidates.length === 0) {
-        return this.passThrough(request, beforeTokens, "no-candidates");
+        return this.nothingToPrune(
+          this.passThrough(request, beforeTokens, "no-candidates"),
+          manual,
+        );
       }
 
       const protectedIds = new Set<string>();
@@ -104,8 +160,11 @@ export class ContextPruner {
           !this.config.excludeTools.has(candidate.toolName),
       );
       const eligibleForScoring: ToolCandidate[] = [];
+      const keys = new Map<ToolCandidate, string>();
       for (const candidate of eligibleByPolicy) {
-        if (this.touchCachedDrop(cacheKey(candidate))) {
+        const key = cacheKey(candidate);
+        keys.set(candidate, key);
+        if (this.touchCachedDrop(key)) {
           cachedIds.add(candidate.toolUseId);
         } else {
           eligibleForScoring.push(candidate);
@@ -116,7 +175,7 @@ export class ContextPruner {
       }
       const cachedTokens = estimateTokens(cachedRequest);
 
-      if (cachedTokens < this.config.pruneThreshold) {
+      if (!manual && cachedTokens < this.config.pruneThreshold) {
         return this.cachedOnly(
           cachedRequest,
           beforeTokens,
@@ -137,6 +196,33 @@ export class ContextPruner {
         );
       }
       if (eligibleForScoring.length === 0) {
+        return this.nothingToPrune(
+          this.cachedOnly(
+            cachedRequest,
+            beforeTokens,
+            cachedTokens,
+            cachedIds.size,
+            "no-candidates",
+          ),
+          manual,
+        );
+      }
+
+      // Keep decisions are reused until the context grows by rescoreTokens
+      // since the last full scoring (or the user runs /jev-prune), so stable
+      // candidates are not re-sent to Jev on every turn.
+      const sessionKey = options.sessionId ?? DEFAULT_SESSION;
+      const lastFull = this.lastFullScoreTokens.get(sessionKey);
+      const fullRescore =
+        manual ||
+        lastFull === undefined ||
+        cachedTokens - lastFull >= this.config.rescoreTokens;
+      const toScore = fullRescore
+        ? eligibleForScoring
+        : eligibleForScoring.filter(
+            (candidate) => !this.keepCache.has(keys.get(candidate) ?? ""),
+          );
+      if (toScore.length === 0) {
         return this.cachedOnly(
           cachedRequest,
           beforeTokens,
@@ -147,9 +233,9 @@ export class ContextPruner {
       }
 
       const goal = this.latestUserGoal(request);
-      const scores = await this.scorer.score(goal, eligibleForScoring);
+      const scores = await this.scorer.score(goal, toScore);
       const cutoff = cachedTokens >= this.config.triggerTokens ? 0.7 : 0.5;
-      const scoredCandidates = eligibleForScoring.map((candidate) => {
+      const scoredCandidates = toScore.map((candidate) => {
         const score = scores.get(candidate.toolUseId);
         if (score === undefined) {
           throw new PruneError(`Missing score for ${candidate.toolUseId}`);
@@ -168,8 +254,12 @@ export class ContextPruner {
             outcome: score < cutoff ? "drop" : "keep",
           });
         }
+        const key = keys.get(candidate) ?? cacheKey(candidate);
         if (score < cutoff) {
           newlyDroppedCandidates.push(candidate);
+          this.keepCache.delete(key);
+        } else {
+          remember(this.keepCache, key, true, this.maxCachedDrops);
         }
       }
       const droppedIds = new Set(cachedIds);
@@ -183,8 +273,17 @@ export class ContextPruner {
           ? cachedRequest
           : this.removePairs(request, droppedIds);
       const afterTokens = estimateTokens(prunedRequest);
+      if (fullRescore) {
+        remember(
+          this.lastFullScoreTokens,
+          sessionKey,
+          afterTokens,
+          MAX_TRACKED_SESSIONS,
+        );
+      }
       const aboveTarget = afterTokens > this.config.targetTokens;
       const notice = this.notice(
+        manual,
         newlyDroppedCandidates.length,
         cachedTokens,
         afterTokens,
@@ -196,9 +295,10 @@ export class ContextPruner {
           : prunedRequest,
         beforeTokens,
         afterTokens,
-        evaluated: eligibleForScoring.length,
+        evaluated: toScore.length,
         dropped: droppedIds.size,
         reason: "pruned",
+        manual,
         aboveTarget,
         notice,
       };
@@ -245,6 +345,48 @@ export class ContextPruner {
     return -1;
   }
 
+  private nothingToPrune(result: PruneResult, manual: boolean): PruneResult {
+    if (!manual) return result;
+    const notice =
+      "[jev-prune] Manual prune: no eligible tool results to prune " +
+      `(the newest ${this.config.keepRecent} are always kept). ` +
+      "Mention this to the user in one short line.";
+    return {
+      ...result,
+      manual,
+      notice,
+      request: this.config.notify
+        ? this.appendNotice(result.request, notice)
+        : result.request,
+    };
+  }
+
+  private invokesManualCommand(request: AnthropicRequest): boolean {
+    if (!this.isNewUserTurn(request)) return false;
+    const last = request.messages[this.lastTurnIndex(request)];
+    if (!last) return false;
+    if (typeof last.content === "string") {
+      return MANUAL_COMMAND.test(last.content);
+    }
+    return last.content.some(
+      (block) =>
+        block.type === "text" &&
+        typeof block.text === "string" &&
+        MANUAL_COMMAND.test(block.text),
+    );
+  }
+
+  private takeManualPrune(
+    request: AnthropicRequest,
+    sessionId: string | undefined,
+  ): boolean {
+    if (sessionId === undefined || !this.isNewUserTurn(request)) return false;
+    const expiresAt = this.manualPrunes.get(sessionId);
+    if (expiresAt === undefined) return false;
+    this.manualPrunes.delete(sessionId);
+    return expiresAt > this.now();
+  }
+
   private isNewUserTurn(request: AnthropicRequest): boolean {
     const last = request.messages[this.lastTurnIndex(request)];
     if (!last || last.role !== "user") return false;
@@ -253,13 +395,14 @@ export class ContextPruner {
   }
 
   private notice(
+    manual: boolean,
     newlyDropped: number,
     beforeTokens: number,
     afterTokens: number,
     aboveTarget: boolean,
   ): string {
     const summary =
-      `[jev-prune] Pruned ${newlyDropped} stale tool result(s): context ` +
+      `[jev-prune] ${manual ? "Manual prune: pruned" : "Pruned"} ${newlyDropped} stale tool result(s): context ` +
       `~${Math.round(beforeTokens / 1000)}K -> ~${Math.round(afterTokens / 1000)}K tokens.`;
     if (!aboveTarget) {
       return `${summary} Mention this to the user in one short line.`;
@@ -299,16 +442,7 @@ export class ContextPruner {
   }
 
   private cacheDrop(candidate: ToolCandidate): void {
-    if (this.maxCachedDrops <= 0) return;
-    const key = cacheKey(candidate);
-    this.dropCache.delete(key);
-    this.dropCache.set(key, true);
-    while (this.dropCache.size > this.maxCachedDrops) {
-      const oldestKey = this.dropCache.keys().next().value as
-        string | undefined;
-      if (oldestKey === undefined) return;
-      this.dropCache.delete(oldestKey);
-    }
+    remember(this.dropCache, cacheKey(candidate), true, this.maxCachedDrops);
   }
 
   private passThrough(

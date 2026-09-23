@@ -8,6 +8,7 @@ describe("loadConfig", () => {
     expect(config.pruneThreshold).toBe(120_000);
     expect(config.triggerTokens).toBe(140_000);
     expect(config.targetTokens).toBe(80_000);
+    expect(config.rescoreTokens).toBe(20_000);
     expect(config.notify).toBe(true);
     expect(config.keepRecent).toBe(5);
     expect(config.jevModel).toBe("jev-latest");

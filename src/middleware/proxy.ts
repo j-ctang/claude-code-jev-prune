@@ -12,8 +12,14 @@ import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
 
 interface RequestPruner {
-  prune(request: AnthropicRequest): Promise<PruneResult>;
+  prune(
+    request: AnthropicRequest,
+    options?: { sessionId?: string },
+  ): Promise<PruneResult>;
+  requestManualPrune?(sessionId: string): void;
 }
+
+export const SESSION_HEADER = "x-claude-code-session-id";
 
 export interface ProxyDependencies {
   config: Config;
@@ -121,7 +127,11 @@ async function forward(
     isAnthropicRequest(body)
   ) {
     const startedAt = Date.now();
-    const result = await dependencies.pruner.prune(body);
+    const sessionId = request.get(SESSION_HEADER);
+    const result = await dependencies.pruner.prune(
+      body,
+      sessionId ? { sessionId } : {},
+    );
     body = result.request;
     dependencies.stats.pruningDecisions += result.evaluated;
     dependencies.stats.droppedPairs += result.dropped;
@@ -137,6 +147,7 @@ async function forward(
         afterTokens: result.afterTokens,
         evaluated: result.evaluated,
         dropped: result.dropped,
+        manual: result.manual ?? false,
         durationMs: Date.now() - startedAt,
       });
       if (result.aboveTarget) {

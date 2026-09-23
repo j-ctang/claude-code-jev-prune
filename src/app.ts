@@ -40,6 +40,24 @@ export function createApp(dependencies: AppDependencies): Express {
     }),
   );
   app.use(express.json({ limit: "32mb" }));
+  app.post("/jev-prune/prune-next", (request, response) => {
+    const sessionId = (request.body as { sessionId?: unknown } | undefined)
+      ?.sessionId;
+    if (
+      typeof sessionId !== "string" ||
+      !/^[A-Za-z0-9-]{1,128}$/.test(sessionId)
+    ) {
+      response.status(400).json({ error: "sessionId is required" });
+      return;
+    }
+    if (!dependencies.pruner.requestManualPrune) {
+      response.status(501).json({ error: "manual pruning is unavailable" });
+      return;
+    }
+    dependencies.pruner.requestManualPrune(sessionId);
+    dependencies.logger.info("manual_prune_requested", { sessionId });
+    response.status(202).json({ queued: true });
+  });
   app.use(
     "/v1",
     createProxyHandler({

@@ -80,6 +80,7 @@ function testConfig(
     pruneThreshold: 0,
     triggerTokens: 1_000_000,
     targetTokens: 0,
+    rescoreTokens: 0,
     notify: false,
     keepRecent: 0,
     excludeTools: new Set(),
@@ -212,6 +213,37 @@ describe("Anthropic proxy", () => {
     expect(response.status).toBe(200);
     expect(response.body).toEqual({ path: "/v1/messages/count_tokens?beta=true" });
     expect(upstream.requests[0]?.body).toEqual(body);
+  });
+
+  test("prunes below the threshold after a manual request for the session", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const scorer: RelevanceScorer = {
+      async score(_goal, candidates) {
+        return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.1]));
+      },
+    };
+    const app = appFor(upstream.url, scorer, { pruneThreshold: 1_000_000 });
+
+    await request(app)
+      .post("/jev-prune/prune-next")
+      .send({ sessionId: "not valid!" })
+      .expect(400);
+    await request(app)
+      .post("/jev-prune/prune-next")
+      .send({ sessionId: "3aad60f3-2450-40f7-b360-c7499da5ba86" })
+      .expect(202, { queued: true });
+    await request(app)
+      .post("/v1/messages?beta=true")
+      .set("x-claude-code-session-id", "3aad60f3-2450-40f7-b360-c7499da5ba86")
+      .send(twoToolRequest)
+      .expect(200);
+
+    expect(
+      allToolUseIds(upstream.requests[0]?.body as AnthropicRequest),
+    ).toEqual([]);
   });
 
   test("logs input and cache usage from JSON and streamed responses", async () => {
