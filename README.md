@@ -74,6 +74,11 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failu
 | `JEV_PRUNE_RESCORE_TOKENS` | `20000` | Growth since the last full scoring before kept tool results are scored again. |
 | `JEV_PRUNE_RESUME_NOTICE_TOKENS` | `60000` | A resumed conversation at or above this size (and below the threshold) gets a one-time `/jev-prune` suggestion. `0` disables it. |
 | `JEV_PRUNE_STATE_PATH` | `~/.claude/jev-prune-state.json` | Where pruning decisions are saved so they survive a proxy restart. |
+| `JEV_PRUNE_SUPERSEDE` | `true` | Replace tool output made out of date by a later call with a one-line stub. |
+| `JEV_PRUNE_TRIM` | `true` | Trim very large outputs Claude has already seen. |
+| `JEV_PRUNE_TRIM_TOOLS` | `Bash` | Comma-separated tools eligible for trimming. `Read` is never trimmed. |
+| `JEV_PRUNE_TRIM_MIN_TOKENS` | `5000` | Outputs larger than this are trimmed. Claude Code already shortens Bash output over ~30K characters (~7.5K tokens), so this sits below that. |
+| `JEV_PRUNE_TRIM_KEEP_TOKENS` | `1000` | Tokens kept at the start and again at the end of a trimmed output. Must be less than half of the minimum. |
 | `JEV_PRUNE_NOTIFY` | `true` | Appends a one-line pruning notice to the new user turn so Claude can tell the user. |
 | `JEV_PRUNE_KEEP_RECENT` | `5` | Number of newest matched tool pairs never evaluated or removed. |
 | `JEV_PRUNE_EXCLUDE_TOOLS` | empty | Comma-separated tool names never evaluated or removed. |
@@ -100,6 +105,15 @@ The proxy will not delete protected content merely to hit the target.
 Jev requests contain no more than 32 named `noul` questions per batch. Drop decisions are cached by a fingerprint of the tool-use ID, name, input, and result. Keep decisions are remembered too: between full scorings, only tool results Jev has not seen are sent. Kept results are scored again once the context grows by `JEV_PRUNE_RESCORE_TOKENS` since the last full scoring, or when you run `/jev-prune`, because the task goal may have changed.
 
 Each `/v1/messages` response is logged as `anthropic_usage` with Anthropic's real `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens`.
+
+## Superseded and Trimmed Outputs
+
+Before asking Jev, each prune applies two mechanical rewrites. Both keep the tool call and every other field on the result block; only the output text changes.
+
+- **Superseded outputs** become a one-line stub. An output is superseded when a later call makes it out of date: a later whole-file `Read` (or same-range `Read`) or `Write` of the same path, a later `Bash` with the identical command, or a later `Grep`/`Glob` with identical input. A later `Read` counts only when it returns file content, not Claude Code's "file unchanged" notice or an error. An `Edit` does not supersede a read. The newest call is never stubbed. This ignores `JEV_PRUNE_KEEP_RECENT`, because a newer copy always exists.
+- **Large outputs** from `JEV_PRUNE_TRIM_TOOLS` over `JEV_PRUNE_TRIM_MIN_TOKENS` keep their first and last `JEV_PRUNE_TRIM_KEEP_TOKENS`, cut on line breaks, with a marker telling Claude to re-run the command for the full output. Only outputs outside the newest `JEV_PRUNE_KEEP_RECENT` are trimmed, so Claude has read them whole.
+
+Superseded outputs are not sent to Jev; trimmed outputs are scored in their short form. Rewrites are saved with the other decisions and re-applied to every request, mid-task and after restarts.
 
 ## Manual Pruning
 

@@ -1,7 +1,12 @@
 import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import { PruneError, loggableReason } from "../errors.js";
-import type { PruneStateSnapshot, PruneStateStore } from "./pruneState.js";
+import type {
+  PruneStateSnapshot,
+  PruneStateStore,
+  Rewrite,
+} from "./pruneState.js";
+import { findSuperseded, trimOutput } from "./toolRewrites.js";
 import type {
   AnthropicRequest,
   ContentBlock,
@@ -94,6 +99,7 @@ export class ContextPruner {
   private readonly maxCachedDrops: number;
   private readonly dropCache = new Map<string, true>();
   private readonly keepCache = new Map<string, true>();
+  private readonly rewriteCache = new Map<string, Rewrite>();
   private readonly lastFullScoreTokens = new Map<string, number>();
   private readonly now: () => number;
   private readonly manualPrunes = new Map<string, number>();
@@ -146,10 +152,12 @@ export class ContextPruner {
       );
     }
 
-    // Earlier drops are re-applied on every request so the pruned prefix stays
-    // byte-identical and keeps its prompt-cache discount.
+    // Earlier drops and rewrites are re-applied on every request so the pruned
+    // prefix stays byte-identical and keeps its prompt-cache discount.
     const cachedIds = new Set<string>();
+    const rewrites = new Map<string, unknown>();
     let cachedRequest = request;
+    let newRewrites = false;
     try {
       const candidates = this.extractCandidates(request);
       if (candidates.length === 0) {
@@ -166,24 +174,22 @@ export class ContextPruner {
         }
       }
 
-      const eligibleByPolicy = candidates.filter(
-        (candidate) =>
-          !protectedIds.has(candidate.toolUseId) &&
-          !this.config.excludeTools.has(candidate.toolName),
+      const allowed = candidates.filter(
+        (candidate) => !this.config.excludeTools.has(candidate.toolName),
       );
-      const eligibleForScoring: ToolCandidate[] = [];
       const keys = new Map<ToolCandidate, string>();
-      for (const candidate of eligibleByPolicy) {
+      for (const candidate of allowed) {
         const key = cacheKey(candidate);
         keys.set(candidate, key);
         if (this.touchCachedDrop(key)) {
           cachedIds.add(candidate.toolUseId);
-        } else {
-          eligibleForScoring.push(candidate);
+          continue;
         }
+        const content = this.cachedRewrite(key, candidate);
+        if (content !== undefined) rewrites.set(candidate.toolUseId, content);
       }
-      if (cachedIds.size > 0) {
-        cachedRequest = this.removePairs(request, cachedIds);
+      if (cachedIds.size > 0 || rewrites.size > 0) {
+        cachedRequest = this.rewriteRequest(request, cachedIds, rewrites);
       }
       const cachedTokens = estimateTokens(cachedRequest);
 
@@ -201,7 +207,7 @@ export class ContextPruner {
         );
       }
       // Pruning mid-task would cut context the agent is actively using, so new
-      // scoring only happens when the user starts a new turn.
+      // decisions only happen when the user starts a new turn.
       if (!this.isNewUserTurn(request)) {
         return this.cachedOnly(
           cachedRequest,
@@ -211,18 +217,82 @@ export class ContextPruner {
           "mid-task",
         );
       }
-      if (eligibleForScoring.length === 0) {
-        return this.nothingToPrune(
-          this.cachedOnly(
-            cachedRequest,
-            beforeTokens,
-            cachedTokens,
-            cachedIds.size,
-            "no-candidates",
-          ),
-          manual,
-        );
+
+      // Cheap mechanical rewrites run before Jev: superseded outputs become a
+      // stub, then large outputs Claude has already seen are trimmed.
+      const live = allowed.filter(
+        (candidate) => !cachedIds.has(candidate.toolUseId),
+      );
+      let superseded = 0;
+      let trimmed = 0;
+      const stubbedIds = new Set<string>();
+      if (this.config.supersede) {
+        for (const [toolUseId, stub] of findSuperseded(live)) {
+          stubbedIds.add(toolUseId);
+          if (rewrites.get(toolUseId) === stub) continue;
+          const candidate = live.find((item) => item.toolUseId === toolUseId);
+          const key = candidate && keys.get(candidate);
+          if (!key) continue;
+          remember(
+            this.rewriteCache,
+            key,
+            { kind: "stub", text: stub },
+            this.maxCachedDrops,
+          );
+          rewrites.set(toolUseId, stub);
+          superseded += 1;
+        }
       }
+      if (this.config.trim) {
+        for (const candidate of live) {
+          if (
+            protectedIds.has(candidate.toolUseId) ||
+            rewrites.has(candidate.toolUseId) ||
+            !this.config.trimTools.has(candidate.toolName) ||
+            estimateTokens(candidate.result) <= this.config.trimMinTokens
+          ) {
+            continue;
+          }
+          const result = trimOutput(
+            candidate.result,
+            this.config.trimKeepTokens,
+          );
+          const key = keys.get(candidate);
+          if (!result || !key) continue;
+          remember(
+            this.rewriteCache,
+            key,
+            { kind: "trim", keepTokens: this.config.trimKeepTokens },
+            this.maxCachedDrops,
+          );
+          rewrites.set(candidate.toolUseId, result.content);
+          trimmed += 1;
+        }
+      }
+      newRewrites = superseded + trimmed > 0;
+      if (newRewrites) {
+        cachedRequest = this.rewriteRequest(request, cachedIds, rewrites);
+      }
+
+      // Superseded results are never sent to Jev; trimmed ones are scored in
+      // their short form.
+      const eligibleForScoring = live
+        .filter(
+          (candidate) =>
+            !protectedIds.has(candidate.toolUseId) &&
+            !stubbedIds.has(candidate.toolUseId),
+        )
+        .map((candidate) =>
+          rewrites.has(candidate.toolUseId)
+            ? { ...candidate, result: rewrites.get(candidate.toolUseId) }
+            : candidate,
+        );
+      const originalKey = (candidate: ToolCandidate) =>
+        keys.get(
+          live.find((item) => item.toolUseId === candidate.toolUseId) ??
+            candidate,
+        ) ?? cacheKey(candidate);
+      const rewrittenTokens = estimateTokens(cachedRequest);
 
       // Keep decisions are reused until the context grows by rescoreTokens
       // since the last full scoring (or the user runs /jev-prune), so stable
@@ -232,64 +302,70 @@ export class ContextPruner {
       const fullRescore =
         manual ||
         lastFull === undefined ||
-        cachedTokens - lastFull >= this.config.rescoreTokens;
+        rewrittenTokens - lastFull >= this.config.rescoreTokens;
       const toScore = fullRescore
         ? eligibleForScoring
         : eligibleForScoring.filter(
-            (candidate) => !this.keepCache.has(keys.get(candidate) ?? ""),
+            (candidate) => !this.keepCache.has(originalKey(candidate)),
           );
-      if (toScore.length === 0) {
-        return this.cachedOnly(
+      if (toScore.length === 0 && !newRewrites) {
+        const result = this.cachedOnly(
           cachedRequest,
           beforeTokens,
           cachedTokens,
           cachedIds.size,
           "no-candidates",
         );
+        return eligibleForScoring.length === 0
+          ? this.nothingToPrune(result, manual)
+          : result;
       }
 
-      const goal = this.latestUserGoal(request);
-      const scores = await this.scorer.score(goal, toScore);
-      const cutoff = cachedTokens >= this.config.triggerTokens ? 0.7 : 0.5;
-      const scoredCandidates = toScore.map((candidate) => {
-        const score = scores.get(candidate.toolUseId);
-        if (score === undefined) {
-          throw new PruneError(`Missing score for ${candidate.toolUseId}`);
-        }
-        return { candidate, score };
-      });
       const newlyDroppedCandidates: ToolCandidate[] = [];
+      if (toScore.length > 0) {
+        const goal = this.latestUserGoal(request);
+        const scores = await this.scorer.score(goal, toScore);
+        const cutoff = rewrittenTokens >= this.config.triggerTokens ? 0.7 : 0.5;
+        const scoredCandidates = toScore.map((candidate) => {
+          const score = scores.get(candidate.toolUseId);
+          if (score === undefined) {
+            throw new PruneError(`Missing score for ${candidate.toolUseId}`);
+          }
+          return { candidate, score };
+        });
 
-      for (const { candidate, score } of scoredCandidates) {
-        if (this.config.debug) {
-          this.logger?.debug("prune_decision", {
-            toolName: candidate.toolName,
-            toolUseId: candidate.toolUseId,
-            relevance: score,
-            cutoff,
-            outcome: score < cutoff ? "drop" : "keep",
-          });
-        }
-        const key = keys.get(candidate) ?? cacheKey(candidate);
-        if (score < cutoff) {
-          newlyDroppedCandidates.push(candidate);
-          this.keepCache.delete(key);
-        } else {
-          remember(this.keepCache, key, true, this.maxCachedDrops);
+        for (const { candidate, score } of scoredCandidates) {
+          if (this.config.debug) {
+            this.logger?.debug("prune_decision", {
+              toolName: candidate.toolName,
+              toolUseId: candidate.toolUseId,
+              relevance: score,
+              cutoff,
+              outcome: score < cutoff ? "drop" : "keep",
+            });
+          }
+          const key = originalKey(candidate);
+          if (score < cutoff) {
+            newlyDroppedCandidates.push(candidate);
+            this.keepCache.delete(key);
+            this.rewriteCache.delete(key);
+            remember(this.dropCache, key, true, this.maxCachedDrops);
+          } else {
+            remember(this.keepCache, key, true, this.maxCachedDrops);
+          }
         }
       }
       const droppedIds = new Set(cachedIds);
       for (const candidate of newlyDroppedCandidates) {
         droppedIds.add(candidate.toolUseId);
-        this.cacheDrop(candidate);
       }
 
       const prunedRequest =
         droppedIds.size === cachedIds.size
           ? cachedRequest
-          : this.removePairs(request, droppedIds);
+          : this.rewriteRequest(request, droppedIds, rewrites);
       const afterTokens = estimateTokens(prunedRequest);
-      if (fullRescore) {
+      if (fullRescore && toScore.length > 0) {
         remember(
           this.lastFullScoreTokens,
           sessionKey,
@@ -299,13 +375,14 @@ export class ContextPruner {
       }
       this.persist();
       const aboveTarget = afterTokens > this.config.targetTokens;
-      const notice = this.notice(
-        manual,
-        newlyDroppedCandidates.length,
-        cachedTokens,
+      const notice = this.notice(manual, {
+        dropped: newlyDroppedCandidates.length,
+        superseded,
+        trimmed,
+        beforeTokens: cachedTokens,
         afterTokens,
         aboveTarget,
-      );
+      });
       return {
         request: this.config.notify
           ? this.appendNotice(prunedRequest, notice)
@@ -314,12 +391,15 @@ export class ContextPruner {
         afterTokens,
         evaluated: toScore.length,
         dropped: droppedIds.size,
+        superseded,
+        trimmed,
         reason: "pruned",
         manual,
         aboveTarget,
         notice,
       };
     } catch (error) {
+      if (newRewrites) this.persist();
       const tokens = estimateTokens(cachedRequest);
       return {
         request: cachedRequest,
@@ -369,6 +449,9 @@ export class ContextPruner {
     for (const key of saved.keeps) {
       remember(this.keepCache, key, true, this.maxCachedDrops);
     }
+    for (const [key, rewrite] of saved.rewrites) {
+      remember(this.rewriteCache, key, rewrite, this.maxCachedDrops);
+    }
     for (const [session, tokens] of saved.lastFullScoreTokens) {
       remember(this.lastFullScoreTokens, session, tokens, MAX_TRACKED_SESSIONS);
     }
@@ -383,6 +466,7 @@ export class ContextPruner {
       this.stateStore.save({
         drops: [...this.dropCache.keys()],
         keeps: [...this.keepCache.keys()],
+        rewrites: [...this.rewriteCache.entries()],
         lastFullScoreTokens: [...this.lastFullScoreTokens.entries()],
         seenSessions: [...this.seenSessions.keys()],
       });
@@ -486,13 +570,25 @@ export class ContextPruner {
 
   private notice(
     manual: boolean,
-    newlyDropped: number,
-    beforeTokens: number,
-    afterTokens: number,
-    aboveTarget: boolean,
+    counts: {
+      dropped: number;
+      superseded: number;
+      trimmed: number;
+      beforeTokens: number;
+      afterTokens: number;
+      aboveTarget: boolean;
+    },
   ): string {
+    const { beforeTokens, afterTokens, aboveTarget } = counts;
+    const extras = [
+      counts.superseded > 0
+        ? `replaced ${counts.superseded} superseded output(s) with a stub`
+        : "",
+      counts.trimmed > 0 ? `trimmed ${counts.trimmed} large output(s)` : "",
+    ].filter(Boolean);
     const summary =
-      `[jev-prune] ${manual ? "Manual prune: pruned" : "Pruned"} ${newlyDropped} stale tool result(s): context ` +
+      `[jev-prune] ${manual ? "Manual prune: pruned" : "Pruned"} ${counts.dropped} stale tool result(s)` +
+      `${extras.length > 0 ? `, ${extras.join(", ")}` : ""}: context ` +
       `~${Math.round(beforeTokens / 1000)}K -> ~${Math.round(afterTokens / 1000)}K tokens.`;
     if (!aboveTarget) {
       return `${summary} Mention this to the user in one short line.`;
@@ -529,10 +625,6 @@ export class ContextPruner {
     this.dropCache.delete(key);
     this.dropCache.set(key, true);
     return true;
-  }
-
-  private cacheDrop(candidate: ToolCandidate): void {
-    remember(this.dropCache, cacheKey(candidate), true, this.maxCachedDrops);
   }
 
   private passThrough(
@@ -616,34 +708,53 @@ export class ContextPruner {
     return "Complete the current task.";
   }
 
-  private removePairs(
+  /**
+   * Removes dropped tool pairs and replaces rewritten tool-result content.
+   * Every other field on a rewritten block (`cache_control`, `is_error`) is kept.
+   */
+  private rewriteRequest(
     request: AnthropicRequest,
     droppedIds: ReadonlySet<string>,
+    rewrites: ReadonlyMap<string, unknown>,
   ): AnthropicRequest {
     const messages = request.messages.flatMap((message) => {
       if (!Array.isArray(message.content)) return [message];
-      const content = message.content.filter((block) => {
+      let changed = false;
+      const content = message.content.flatMap((block) => {
         if (
           message.role === "assistant" &&
           isToolUse(block) &&
           droppedIds.has(block.id)
         ) {
-          return false;
+          changed = true;
+          return [];
         }
-        if (
-          message.role === "user" &&
-          isToolResult(block) &&
-          droppedIds.has(block.tool_use_id)
-        ) {
-          return false;
+        if (message.role === "user" && isToolResult(block)) {
+          if (droppedIds.has(block.tool_use_id)) {
+            changed = true;
+            return [];
+          }
+          if (rewrites.has(block.tool_use_id)) {
+            changed = true;
+            return [{ ...block, content: rewrites.get(block.tool_use_id) }];
+          }
         }
-        return true;
+        return [block];
       });
-      if (content.length === message.content.length) return [message];
+      if (!changed) return [message];
       if (content.length === 0) return [];
       return [{ ...message, content }];
     });
 
     return { ...request, messages };
+  }
+
+  /** Recomputes a saved rewrite for this candidate's original output. */
+  private cachedRewrite(key: string, candidate: ToolCandidate): unknown {
+    const rewrite = this.rewriteCache.get(key);
+    if (!rewrite) return undefined;
+    remember(this.rewriteCache, key, rewrite, this.maxCachedDrops);
+    if (rewrite.kind === "stub") return rewrite.text;
+    return trimOutput(candidate.result, rewrite.keepTokens)?.content;
   }
 }

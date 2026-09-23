@@ -151,6 +151,8 @@ async function forward(
         afterTokens: result.afterTokens,
         evaluated: result.evaluated,
         dropped: result.dropped,
+        superseded: result.superseded ?? 0,
+        trimmed: result.trimmed ?? 0,
         manual: result.manual ?? false,
         durationMs: Date.now() - startedAt,
       });

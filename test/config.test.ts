@@ -10,6 +10,11 @@ describe("loadConfig", () => {
     expect(config.targetTokens).toBe(80_000);
     expect(config.rescoreTokens).toBe(20_000);
     expect(config.resumeNoticeTokens).toBe(60_000);
+    expect(config.supersede).toBe(true);
+    expect(config.trim).toBe(true);
+    expect([...config.trimTools]).toEqual(["Bash"]);
+    expect(config.trimMinTokens).toBe(5_000);
+    expect(config.trimKeepTokens).toBe(1_000);
     expect(config.statePath).toMatch(/\.claude\/jev-prune-state\.json$/);
     expect(
       loadConfig({ TYPESAFE_API_KEY: "secret", JEV_PRUNE_STATE_PATH: "" }).statePath,
@@ -42,6 +47,24 @@ describe("loadConfig", () => {
       }),
     ).toThrow(
       "JEV_PRUNE_TARGET_TOKENS must be less than or equal to JEV_PRUNE_THRESHOLD",
+    );
+  });
+
+  test("never allows Read to be trimmed and validates trim sizes", () => {
+    const config = loadConfig({
+      TYPESAFE_API_KEY: "secret",
+      JEV_PRUNE_TRIM_TOOLS: "Bash, Read,Grep",
+    });
+
+    expect([...config.trimTools]).toEqual(["Bash", "Grep"]);
+    expect(() =>
+      loadConfig({
+        TYPESAFE_API_KEY: "secret",
+        JEV_PRUNE_TRIM_MIN_TOKENS: "3000",
+        JEV_PRUNE_TRIM_KEEP_TOKENS: "2000",
+      }),
+    ).toThrow(
+      "JEV_PRUNE_TRIM_KEEP_TOKENS must be less than half of JEV_PRUNE_TRIM_MIN_TOKENS",
     );
   });
 

@@ -10,6 +10,11 @@ export interface Config {
   rescoreTokens: number;
   resumeNoticeTokens: number;
   statePath: string;
+  supersede: boolean;
+  trim: boolean;
+  trimTools: ReadonlySet<string>;
+  trimMinTokens: number;
+  trimKeepTokens: number;
   notify: boolean;
   keepRecent: number;
   excludeTools: ReadonlySet<string>;
@@ -85,6 +90,21 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       "JEV_PRUNE_TARGET_TOKENS must be less than or equal to JEV_PRUNE_THRESHOLD",
     );
   }
+  const trimMinTokens = parseInteger(
+    env.JEV_PRUNE_TRIM_MIN_TOKENS ?? "5000",
+    "JEV_PRUNE_TRIM_MIN_TOKENS",
+    1,
+  );
+  const trimKeepTokens = parseInteger(
+    env.JEV_PRUNE_TRIM_KEEP_TOKENS ?? "1000",
+    "JEV_PRUNE_TRIM_KEEP_TOKENS",
+    1,
+  );
+  if (trimKeepTokens * 2 >= trimMinTokens) {
+    throw new Error(
+      "JEV_PRUNE_TRIM_KEEP_TOKENS must be less than half of JEV_PRUNE_TRIM_MIN_TOKENS",
+    );
+  }
   if (pruningEnabled && !env.TYPESAFE_API_KEY) {
     throw new Error("TYPESAFE_API_KEY is required when pruning is enabled");
   }
@@ -108,6 +128,22 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     statePath:
       env.JEV_PRUNE_STATE_PATH ||
       join(homedir(), ".claude", "jev-prune-state.json"),
+    supersede: parseBoolean(
+      env.JEV_PRUNE_SUPERSEDE ?? "true",
+      "JEV_PRUNE_SUPERSEDE",
+    ),
+    trim: parseBoolean(env.JEV_PRUNE_TRIM ?? "true", "JEV_PRUNE_TRIM"),
+    // Read results are never trimmed: Claude needs file contents to edit.
+    // Claude Code already replaces Bash output over ~30K characters (~7.5K
+    // tokens) with a short preview, so the trim defaults sit below that.
+    trimTools: new Set(
+      (env.JEV_PRUNE_TRIM_TOOLS ?? "Bash")
+        .split(",")
+        .map((value) => value.trim())
+        .filter((value) => value && value !== "Read"),
+    ),
+    trimMinTokens,
+    trimKeepTokens,
     notify: parseBoolean(env.JEV_PRUNE_NOTIFY ?? "true", "JEV_PRUNE_NOTIFY"),
     keepRecent: parseInteger(
       env.JEV_PRUNE_KEEP_RECENT ?? "5",

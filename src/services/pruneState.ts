@@ -7,6 +7,11 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 
+/** A stub replaces the whole output; a trim is recomputed from the original. */
+export type Rewrite =
+  | { kind: "stub"; text: string }
+  | { kind: "trim"; keepTokens: number };
+
 /**
  * Pruning memory that must survive a proxy restart. Without it, dropped tool
  * results reappear in live conversations and break their prompt cache.
@@ -14,6 +19,7 @@ import { dirname } from "node:path";
 export interface PruneStateSnapshot {
   drops: string[];
   keeps: string[];
+  rewrites: Array<[string, Rewrite]>;
   lastFullScoreTokens: Array<[string, number]>;
   seenSessions: string[];
 }
@@ -42,6 +48,21 @@ function tokenEntries(value: unknown): Array<[string, number]> {
   );
 }
 
+function rewriteEntries(value: unknown): Array<[string, Rewrite]> {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is [string, Rewrite] => {
+    if (!Array.isArray(entry) || typeof entry[0] !== "string") return false;
+    const rewrite = entry[1] as Record<string, unknown> | null;
+    if (typeof rewrite !== "object" || rewrite === null) return false;
+    return (
+      (rewrite.kind === "stub" && typeof rewrite.text === "string") ||
+      (rewrite.kind === "trim" &&
+        typeof rewrite.keepTokens === "number" &&
+        Number.isFinite(rewrite.keepTokens))
+    );
+  });
+}
+
 export function createFileStateStore(path: string): PruneStateStore {
   return {
     load() {
@@ -57,6 +78,7 @@ export function createFileStateStore(path: string): PruneStateStore {
         return {
           drops: stringArray(parsed.drops),
           keeps: stringArray(parsed.keeps),
+          rewrites: rewriteEntries(parsed.rewrites),
           lastFullScoreTokens: tokenEntries(parsed.lastFullScoreTokens),
           seenSessions: stringArray(parsed.seenSessions),
         };
