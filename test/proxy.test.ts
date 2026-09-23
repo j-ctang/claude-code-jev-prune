@@ -79,6 +79,8 @@ function testConfig(
     pruningEnabled: true,
     pruneThreshold: 0,
     triggerTokens: 1_000_000,
+    targetTokens: 0,
+    notify: false,
     keepRecent: 0,
     excludeTools: new Set(),
     debug: false,

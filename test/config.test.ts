@@ -5,8 +5,10 @@ describe("loadConfig", () => {
     const config = loadConfig({ TYPESAFE_API_KEY: "secret" });
 
     expect(config.port).toBe(5590);
-    expect(config.pruneThreshold).toBe(100_000);
-    expect(config.triggerTokens).toBe(150_000);
+    expect(config.pruneThreshold).toBe(120_000);
+    expect(config.triggerTokens).toBe(140_000);
+    expect(config.targetTokens).toBe(80_000);
+    expect(config.notify).toBe(true);
     expect(config.keepRecent).toBe(5);
     expect(config.jevModel).toBe("jev-latest");
     expect(config.jevBaseUrl).toBe("https://api.typesafe.ai");
@@ -22,6 +24,18 @@ describe("loadConfig", () => {
       }),
     ).toThrow(
       "JEV_PRUNE_TRIGGER_TOKENS must be greater than or equal to JEV_PRUNE_THRESHOLD",
+    );
+  });
+
+  test("rejects a target above the normal threshold", () => {
+    expect(() =>
+      loadConfig({
+        TYPESAFE_API_KEY: "secret",
+        JEV_PRUNE_THRESHOLD: "100000",
+        JEV_PRUNE_TARGET_TOKENS: "110000",
+      }),
+    ).toThrow(
+      "JEV_PRUNE_TARGET_TOKENS must be less than or equal to JEV_PRUNE_THRESHOLD",
     );
   });
 

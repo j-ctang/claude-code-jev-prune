@@ -1,6 +1,7 @@
 import type { Config } from "../src/config.js";
 import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
+import { estimateTokens } from "../src/utils/tokenCounter.js";
 import type {
   AnthropicRequest,
   RelevanceScorer,
@@ -20,6 +21,8 @@ function config(overrides: Partial<Config> = {}): Config {
     pruningEnabled: true,
     pruneThreshold: 0,
     triggerTokens: 1_000_000,
+    targetTokens: 0,
+    notify: false,
     keepRecent: 0,
     excludeTools: new Set(),
     debug: false,
@@ -77,7 +80,10 @@ describe("ContextPruner", () => {
   });
 
   test("protects the configured number of newest matched pairs", async () => {
-    const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+    const observed = {
+      goals: [] as string[],
+      batches: [] as ToolCandidate[][],
+    };
     const pruner = new ContextPruner({
       config: config({ keepRecent: 1 }),
       scorer: scorerReturning({ "call-old": 0.01 }, observed),
@@ -85,15 +91,18 @@ describe("ContextPruner", () => {
 
     const result = await pruner.prune(twoToolRequest);
 
-    expect(observed.batches[0]?.map((candidate) => candidate.toolUseId)).toEqual([
-      "call-old",
-    ]);
+    expect(
+      observed.batches[0]?.map((candidate) => candidate.toolUseId),
+    ).toEqual(["call-old"]);
     expect(allToolUseIds(result.request)).toEqual(["call-new"]);
     expect(allToolResultIds(result.request)).toEqual(["call-new"]);
   });
 
   test("protects excluded tools from scoring and removal", async () => {
-    const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+    const observed = {
+      goals: [] as string[],
+      batches: [] as ToolCandidate[][],
+    };
     const pruner = new ContextPruner({
       config: config({ excludeTools: new Set(["read_file"]) }),
       scorer: scorerReturning({}, observed),
@@ -126,7 +135,12 @@ describe("ContextPruner", () => {
               name: "test",
               input: {},
             }),
-            contentBlock({ type: "tool_use", id: "unmatched", name: "test", input: {} }),
+            contentBlock({
+              type: "tool_use",
+              id: "unmatched",
+              name: "test",
+              input: {},
+            }),
             contentBlock({ type: "tool_use", id: 17, name: "test", input: {} }),
           ],
         },
@@ -246,10 +260,7 @@ describe("ContextPruner", () => {
 
     expect(allToolUseIds(first.request)).toEqual(["call-new"]);
     expect(allToolUseIds(second.request)).toEqual(["call-new"]);
-    expect(batches).toEqual([
-      ["call-old", "call-new"],
-      ["call-new"],
-    ]);
+    expect(batches).toEqual([["call-old", "call-new"], ["call-new"]]);
   });
 
   test("does not reuse a drop when the tool payload changes under the same ID", async () => {
@@ -380,16 +391,130 @@ describe("ContextPruner", () => {
 
     const result = await pruner.prune(twoToolRequest);
 
-    expect(result.request.messages).toHaveLength(4);
+    expect(result.request.messages).toHaveLength(5);
     expect(
       result.request.messages.some(
-        (message) => Array.isArray(message.content) && message.content.length === 0,
+        (message) =>
+          Array.isArray(message.content) && message.content.length === 0,
       ),
     ).toBe(false);
   });
 
+  test("does not score while the agent is mid-task", async () => {
+    const observed = {
+      goals: [] as string[],
+      batches: [] as ToolCandidate[][],
+    };
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.1 }, observed),
+    });
+    const midTask = clone(twoToolRequest);
+    midTask.messages.pop();
+
+    const result = await pruner.prune(midTask);
+
+    expect(result.reason).toBe("mid-task");
+    expect(result.request).toBe(midTask);
+    expect(observed.batches).toEqual([]);
+  });
+
+  test("re-applies earlier drops mid-task without scoring again", async () => {
+    const observed = {
+      goals: [] as string[],
+      batches: [] as ToolCandidate[][],
+    };
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
+    });
+    await pruner.prune(twoToolRequest);
+    const midTask = clone(twoToolRequest);
+    midTask.messages.push(
+      {
+        role: "assistant",
+        content: [
+          contentBlock({
+            type: "tool_use",
+            id: "call-3",
+            name: "bash",
+            input: {},
+          }),
+        ],
+      },
+      {
+        role: "user",
+        content: [
+          contentBlock({
+            type: "tool_result",
+            tool_use_id: "call-3",
+            content: "ok",
+          }),
+        ],
+      },
+    );
+
+    const result = await pruner.prune(midTask);
+
+    expect(result.reason).toBe("mid-task");
+    expect(allToolUseIds(result.request)).toEqual(["call-new", "call-3"]);
+    expect(observed.batches).toHaveLength(1);
+  });
+
+  test("does not score again once earlier drops bring context under the threshold", async () => {
+    const observed = {
+      goals: [] as string[],
+      batches: [] as ToolCandidate[][],
+    };
+    const pruner = new ContextPruner({
+      config: config({ pruneThreshold: estimateTokens(twoToolRequest) - 10 }),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
+    });
+
+    const first = await pruner.prune(twoToolRequest);
+    const second = await pruner.prune(twoToolRequest);
+
+    expect(first.reason).toBe("pruned");
+    expect(second.reason).toBe("below-threshold");
+    expect(allToolUseIds(second.request)).toEqual(["call-new"]);
+    expect(observed.batches).toHaveLength(1);
+  });
+
+  test("appends a notice about the cut to the new user turn", async () => {
+    const pruner = new ContextPruner({
+      config: config({ notify: true, targetTokens: 1_000_000_000 }),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+    });
+
+    const result = await pruner.prune(twoToolRequest);
+    const last = result.request.messages.at(-1);
+
+    expect(result.aboveTarget).toBe(false);
+    expect(last?.content).toEqual([
+      { type: "text", text: "Keep going with the JWT fix." },
+      { type: "text", text: result.notice },
+    ]);
+    expect(result.notice).toMatch(/Pruned 1 stale tool result/);
+    expect(result.notice).not.toMatch(/handoff/);
+  });
+
+  test("suggests a handoff when pruning cannot reach the target", async () => {
+    const pruner = new ContextPruner({
+      config: config({ notify: true, targetTokens: 0 }),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+    });
+
+    const result = await pruner.prune(twoToolRequest);
+
+    expect(result.aboveTarget).toBe(true);
+    expect(result.notice).toMatch(/handoff file/);
+  });
+
   test("uses the latest non-tool user text as the goal", async () => {
-    const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+    const observed = {
+      goals: [] as string[],
+      batches: [] as ToolCandidate[][],
+    };
     const pruner = new ContextPruner({
       config: config(),
       scorer: scorerReturning({ "call-old": 0.9, "call-new": 0.9 }, observed),
@@ -397,7 +522,7 @@ describe("ContextPruner", () => {
 
     await pruner.prune(twoToolRequest);
 
-    expect(observed.goals).toEqual(["Now fix JWT validation."]);
+    expect(observed.goals).toEqual(["Keep going with the JWT fix."]);
   });
 
   test("fails open if a candidate score is missing", async () => {
@@ -420,7 +545,9 @@ describe("ContextPruner", () => {
         attempt += 1;
         batches.push(candidates.map((candidate) => candidate.toolUseId));
         if (attempt === 1) return new Map([["call-old", 0.1]]);
-        return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.9]));
+        return new Map(
+          candidates.map((candidate) => [candidate.toolUseId, 0.9]),
+        );
       },
     };
     const pruner = new ContextPruner({ config: config(), scorer });

@@ -139,6 +139,12 @@ async function forward(
         dropped: result.dropped,
         durationMs: Date.now() - startedAt,
       });
+      if (result.aboveTarget) {
+        dependencies.logger.warn("prune_above_target", {
+          afterTokens: result.afterTokens,
+          targetTokens: dependencies.config.targetTokens,
+        });
+      }
     }
   }
 

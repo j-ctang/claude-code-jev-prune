@@ -3,6 +3,8 @@ export interface Config {
   pruningEnabled: boolean;
   pruneThreshold: number;
   triggerTokens: number;
+  targetTokens: number;
+  notify: boolean;
   keepRecent: number;
   excludeTools: ReadonlySet<string>;
   debug: boolean;
@@ -53,18 +55,28 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     "JEV_PRUNE_ENABLED",
   );
   const pruneThreshold = parseInteger(
-    env.JEV_PRUNE_THRESHOLD ?? "100000",
+    env.JEV_PRUNE_THRESHOLD ?? "120000",
     "JEV_PRUNE_THRESHOLD",
     0,
   );
   const triggerTokens = parseInteger(
-    env.JEV_PRUNE_TRIGGER_TOKENS ?? "150000",
+    env.JEV_PRUNE_TRIGGER_TOKENS ?? "140000",
     "JEV_PRUNE_TRIGGER_TOKENS",
     0,
   );
   if (triggerTokens < pruneThreshold) {
     throw new Error(
       "JEV_PRUNE_TRIGGER_TOKENS must be greater than or equal to JEV_PRUNE_THRESHOLD",
+    );
+  }
+  const targetTokens = parseInteger(
+    env.JEV_PRUNE_TARGET_TOKENS ?? "80000",
+    "JEV_PRUNE_TARGET_TOKENS",
+    0,
+  );
+  if (targetTokens > pruneThreshold) {
+    throw new Error(
+      "JEV_PRUNE_TARGET_TOKENS must be less than or equal to JEV_PRUNE_THRESHOLD",
     );
   }
   if (pruningEnabled && !env.TYPESAFE_API_KEY) {
@@ -76,6 +88,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     pruningEnabled,
     pruneThreshold,
     triggerTokens,
+    targetTokens,
+    notify: parseBoolean(env.JEV_PRUNE_NOTIFY ?? "true", "JEV_PRUNE_NOTIFY"),
     keepRecent: parseInteger(
       env.JEV_PRUNE_KEEP_RECENT ?? "5",
       "JEV_PRUNE_KEEP_RECENT",

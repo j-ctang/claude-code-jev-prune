@@ -68,8 +68,10 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failu
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe API origin. |
 | `JEV_MODEL` | `jev-latest` | Model name sent to `/v1/systemone`. |
 | `JEV_PRUNE_ENABLED` | `true` | Enables relevance scoring and pruning. |
-| `JEV_PRUNE_THRESHOLD` | `100000` | Estimated tokens at which normal pruning begins. |
-| `JEV_PRUNE_TRIGGER_TOKENS` | `150000` | Estimated tokens at which the aggressive cutoff is used. |
+| `JEV_PRUNE_THRESHOLD` | `120000` | Estimated tokens at which pruning runs on the next new user turn. |
+| `JEV_PRUNE_TRIGGER_TOKENS` | `140000` | Estimated tokens at which the aggressive cutoff is used. |
+| `JEV_PRUNE_TARGET_TOKENS` | `80000` | Size a prune aims for. Above it, the proxy warns and suggests a handoff. |
+| `JEV_PRUNE_NOTIFY` | `true` | Appends a one-line pruning notice to the new user turn so Claude can tell the user. |
 | `JEV_PRUNE_KEEP_RECENT` | `5` | Number of newest matched tool pairs never evaluated or removed. |
 | `JEV_PRUNE_EXCLUDE_TOOLS` | empty | Comma-separated tool names never evaluated or removed. |
 | `JEV_TIMEOUT_MS` | `2000` | Timeout for each TypeSafe batch. |
@@ -77,19 +79,24 @@ See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failu
 | `ANTHROPIC_UPSTREAM_URL` | `https://api.anthropic.com` | Anthropic-compatible upstream used by the proxy. |
 | `PORT` | `5590` | Local listening port. |
 
-All integer and boolean values are validated at startup. The aggressive threshold must be greater than or equal to the normal threshold.
+All integer and boolean values are validated at startup. The aggressive threshold must be greater than or equal to the normal threshold, and the target must be less than or equal to it.
 
 ## Decision Policy
 
 The proxy estimates tokens as `ceil(JSON.stringify(request).length / 4)`. This is a deterministic trigger heuristic, not Anthropic's billing-token count.
 
-- Below `JEV_PRUNE_THRESHOLD`: forward unchanged without contacting TypeSafe.
-- At or above `JEV_PRUNE_THRESHOLD`: drop eligible pairs with relevance below `0.50`.
+- Earlier drop decisions are re-applied to every request, so the pruned prefix stays identical and keeps its prompt-cache discount.
+- Below `JEV_PRUNE_THRESHOLD` (after earlier drops): forward without contacting TypeSafe.
+- Mid-task requests (the last message is a `tool_result`) are never scored. Pruning waits for the next new user turn so it never cuts context the agent is using.
+- On a new user turn at or above `JEV_PRUNE_THRESHOLD`: drop eligible pairs with relevance below `0.50`.
 - At or above `JEV_PRUNE_TRIGGER_TOKENS`: drop eligible pairs with relevance below `0.70`.
+- After a prune, the proxy logs `prune_complete`. If the result is still above `JEV_PRUNE_TARGET_TOKENS`, it also logs `prune_above_target`, and the notice suggests writing a handoff file for a fresh session.
 
-The trigger is more aggressive, but it is not a guaranteed context-size ceiling. The proxy will not delete protected content merely to hit a target.
+The proxy will not delete protected content merely to hit the target.
 
-Jev requests contain no more than 32 named `noul` questions per batch. Drop decisions are cached by tool-use ID; kept candidates are evaluated again because the task goal may change.
+Jev requests contain no more than 32 named `noul` questions per batch. Drop decisions are cached by a fingerprint of the tool-use ID, name, input, and result. Kept candidates are evaluated again at the next prune because the task goal may change.
+
+Each `/v1/messages` response is logged as `anthropic_usage` with Anthropic's real `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens`.
 
 ## Privacy Boundary
 
