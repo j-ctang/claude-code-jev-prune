@@ -572,6 +572,29 @@ describe("Anthropic proxy", () => {
     expect(response.body).toEqual({ error: "Anthropic upstream unavailable" });
   });
 
+  test("counts prunes and newly removed tokens in health", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const app = appFor(upstream.url, {
+      async score(_goal, candidates) {
+        return new Map(
+          candidates.map((candidate) => [
+            candidate.toolUseId,
+            candidate.toolUseId === "call-old" ? 0 : 1,
+          ]),
+        );
+      },
+    });
+
+    await request(app).post("/v1/messages").send(twoToolRequest);
+    const health = await request(app).get("/health");
+
+    expect(health.body.prunes).toBe(1);
+    expect(health.body.tokens_removed).toBeGreaterThan(0);
+  });
+
   test("reports process health and live counters", async () => {
     const upstream = await startUpstream((_incoming, response) => {
       response.end("{}");
@@ -581,6 +604,8 @@ describe("Anthropic proxy", () => {
       pruningDecisions: 3,
       droppedPairs: 2,
       failOpenEvents: 1,
+      prunes: 4,
+      tokensRemoved: 5_000,
     };
     const config = testConfig(upstream.url);
     const pruner = new ContextPruner({
@@ -610,6 +635,9 @@ describe("Anthropic proxy", () => {
       pruning_decisions: 3,
       dropped_pairs: 2,
       fail_open_events: 1,
+      prunes: 4,
+      tokens_removed: 5_000,
+      started_at: expect.any(String),
       uptime_seconds: expect.any(Number),
     });
     expect(response.body.uptime_seconds).toBeGreaterThanOrEqual(42);

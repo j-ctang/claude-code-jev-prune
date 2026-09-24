@@ -27,6 +27,8 @@ export function createApp(dependencies: AppDependencies): Express {
     pruningDecisions: 0,
     droppedPairs: 0,
     failOpenEvents: 0,
+    prunes: 0,
+    tokensRemoved: 0,
   };
 
   app.disable("x-powered-by");

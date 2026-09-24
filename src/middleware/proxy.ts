@@ -223,11 +223,14 @@ async function forward(
         tokens: result.afterTokens,
       });
     } else if (result.reason === "pruned") {
+      dependencies.stats.prunes += 1;
+      dependencies.stats.tokensRemoved += result.removedTokens ?? 0;
       dependencies.logger.info("prune_complete", {
         beforeTokens: result.beforeTokens,
         afterTokens: result.afterTokens,
         evaluated: result.evaluated,
         dropped: result.dropped,
+        removedTokens: result.removedTokens ?? 0,
         superseded: result.superseded ?? 0,
         trimmed: result.trimmed ?? 0,
         manual: result.manual ?? false,

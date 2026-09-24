@@ -23,6 +23,9 @@ export function createHealthHandler(
       pruning_decisions: dependencies.stats.pruningDecisions,
       dropped_pairs: dependencies.stats.droppedPairs,
       fail_open_events: dependencies.stats.failOpenEvents,
+      prunes: dependencies.stats.prunes,
+      tokens_removed: dependencies.stats.tokensRemoved,
+      started_at: new Date(dependencies.startedAt).toISOString(),
       uptime_seconds: Math.floor((Date.now() - dependencies.startedAt) / 1_000),
     });
   };
