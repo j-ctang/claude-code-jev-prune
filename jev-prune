@@ -1,0 +1,63 @@
+#!/usr/bin/env node
+import { spawnSync } from "node:child_process";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const repository = dirname(fileURLToPath(import.meta.url));
+const args = process.argv.slice(2);
+if (args.includes("--help") || args.includes("-h")) {
+  process.stdout.write(`Usage: jev-prune [--setup] [project-directory] [Claude Code options]
+
+Starts the Jev Prune proxy and opens Claude Code through it.
+  project-directory   Folder to open Claude Code in (default: current folder)
+  --setup             Ask the setup questions again
+  Claude Code options Passed to claude, for example --resume or --continue
+
+Inside Claude Code: /jev-prune prunes now. Logs: ~/.claude/jev-prune.log
+`);
+  process.exit(0);
+}
+const setupAgain = args[0] === "--setup";
+if (setupAgain) args.shift();
+const project = resolve(args[0] && !args[0].startsWith("-") ? args.shift() : process.cwd());
+
+function hasConfiguredKey() {
+  const envPath = join(repository, ".env");
+  if (!existsSync(envPath)) return false;
+  const value = /^\s*TYPESAFE_API_KEY\s*=\s*(.*)$/m.exec(readFileSync(envPath, "utf8"))?.[1]
+    ?.trim().replace(/^["']|["']$/g, "");
+  return Boolean(value && value !== "tsf_replace_with_your_key");
+}
+
+function modified(path) {
+  if (!existsSync(path)) return 0;
+  const stats = statSync(path);
+  if (!stats.isDirectory()) return stats.mtimeMs;
+  return Math.max(0, ...readdirSync(path).map((entry) => modified(join(path, entry))));
+}
+
+function run(command, commandArgs) {
+  const child = spawnSync(command, commandArgs, { cwd: repository, stdio: "inherit" });
+  if (child.error) throw child.error;
+  if (child.status !== 0) process.exit(child.status ?? 1);
+}
+
+try {
+  const installed = join(repository, "node_modules", ".package-lock.json");
+  if (!existsSync(join(repository, "node_modules")) || modified(join(repository, "package-lock.json")) > modified(installed)) {
+    process.stdout.write("Installing Jev Prune dependencies...\n");
+    run("npm", ["ci", "--silent"]);
+  }
+  const built = modified(join(repository, "dist", "index.js"));
+  const sources = ["src", "package.json", "tsconfig.json"].map((path) => modified(join(repository, path)));
+  if (!built || Math.max(...sources) > built) run("npm", ["run", "build", "--silent"]);
+  if (setupAgain || !hasConfiguredKey()) {
+    run(process.execPath, [join(repository, "dist", "setup.js"), "--project", project]);
+    if (!hasConfiguredKey()) throw new Error("Setup did not finish. Run jev-prune --setup to try again.");
+  }
+  run(process.execPath, [join(repository, "dist", "launch.js"), "--project", project, ...args]);
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : "Jev Prune could not start"}\n`);
+  process.exitCode = 1;
+}

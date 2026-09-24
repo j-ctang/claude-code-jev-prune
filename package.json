@@ -3,9 +3,14 @@
   "version": "1.0.0",
   "description": "Local Claude Code HTTP proxy for pair-safe context pruning with TypeSafe Jev",
   "main": "dist/index.js",
+  "bin": {
+    "jev-prune": "jev-prune"
+  },
   "type": "module",
   "scripts": {
     "start": "node dist/index.js",
+    "setup": "npm run build && node dist/setup.js",
+    "claude": "npm run build && node dist/launch.js",
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "test": "jest --runInBand",
