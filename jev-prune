@@ -12,12 +12,17 @@ if (args.includes("--help") || args.includes("-h")) {
 Starts the Jev Prune proxy and opens Claude Code through it.
   project-directory   Folder to open Claude Code in (default: current folder)
   --setup             Ask the setup questions again
+  --stats             Show how much stale context has been pruned
+  --doctor            Check the install and explain any problem
+  --update            Download the latest Jev Prune
   Claude Code options Passed to claude, for example --resume or --continue
 
 Inside Claude Code: /jev-prune prunes now. Logs: ~/.claude/jev-prune.log
 `);
   process.exit(0);
 }
+const tool = { "--stats": "stats.js", "--doctor": "doctor.js" }[args[0]];
+const update = args[0] === "--update";
 const setupAgain = args[0] === "--setup";
 if (setupAgain) args.shift();
 const project = resolve(args[0] && !args[0].startsWith("-") ? args.shift() : process.cwd());
@@ -44,6 +49,9 @@ function run(command, commandArgs) {
 }
 
 try {
+  if (update) {
+    run("git", ["pull", "--ff-only"]);
+  }
   const installed = join(repository, "node_modules", ".package-lock.json");
   if (!existsSync(join(repository, "node_modules")) || modified(join(repository, "package-lock.json")) > modified(installed)) {
     process.stdout.write("Installing Jev Prune dependencies...\n");
@@ -52,6 +60,14 @@ try {
   const built = modified(join(repository, "dist", "index.js"));
   const sources = ["src", "package.json", "tsconfig.json"].map((path) => modified(join(repository, path)));
   if (!built || Math.max(...sources) > built) run("npm", ["run", "build", "--silent"]);
+  if (update) {
+    process.stdout.write("Jev Prune is up to date. Open sessions keep the old version until they all close.\n");
+    process.exit(0);
+  }
+  if (tool) {
+    run(process.execPath, [join(repository, "dist", tool)]);
+    process.exit(0);
+  }
   if (setupAgain || !hasConfiguredKey()) {
     run(process.execPath, [join(repository, "dist", "setup.js"), "--project", project]);
     if (!hasConfiguredKey()) throw new Error("Setup did not finish. Run jev-prune --setup to try again.");
