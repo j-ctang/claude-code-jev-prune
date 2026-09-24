@@ -92,6 +92,22 @@ function cacheKey(candidate: ToolCandidate): string {
     .digest("base64url");
 }
 
+/**
+ * Tool search results hold `tool_reference` blocks that load deferred tool
+ * definitions. Removing one would unload tools Claude may still call.
+ */
+function loadsToolDefinitions(result: unknown): boolean {
+  return (
+    Array.isArray(result) &&
+    result.some(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "tool_reference",
+    )
+  );
+}
+
 export class ContextPruner {
   private readonly config: Config;
   private readonly scorer: RelevanceScorer;
@@ -192,7 +208,9 @@ export class ContextPruner {
       }
 
       const allowed = candidates.filter(
-        (candidate) => !this.config.excludeTools.has(candidate.toolName),
+        (candidate) =>
+          !this.config.excludeTools.has(candidate.toolName) &&
+          !loadsToolDefinitions(candidate.result),
       );
       const keys = new Map<ToolCandidate, string>();
       for (const candidate of allowed) {
@@ -410,6 +428,7 @@ export class ContextPruner {
         afterTokens,
         evaluated: toScore.length,
         dropped: droppedIds.size,
+        removedTokens: Math.max(0, cachedTokens - afterTokens),
         superseded,
         trimmed,
         reason: "pruned",
