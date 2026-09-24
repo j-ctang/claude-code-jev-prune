@@ -10,6 +10,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
+import { Writable } from "node:stream";
 import { parse } from "dotenv";
 import { findCanaryCandidates, type CanaryCandidate } from "./setupCanary.js";
 import { CanaryMode } from "./services/canaryMode.js";
@@ -31,7 +32,29 @@ async function main(): Promise<void> {
     );
     return;
   }
-  const cli = createInterface({ input: process.stdin, output: process.stdout });
+  // Echo goes through this stream so the API key can be typed unseen.
+  let muted = false;
+  const output = new Writable({
+    write(chunk, encoding, done) {
+      if (!muted) process.stdout.write(chunk, encoding);
+      done();
+    },
+  });
+  const cli = createInterface({
+    input: process.stdin,
+    output,
+    terminal: Boolean(process.stdin.isTTY),
+  });
+  const askSecret = async (prompt: string): Promise<string> => {
+    process.stdout.write(prompt);
+    muted = true;
+    try {
+      return await cli.question("");
+    } finally {
+      muted = false;
+      process.stdout.write("\n");
+    }
+  };
   try {
     const index = process.argv.indexOf("--project");
     const supplied = index >= 0 ? process.argv[index + 1] : undefined;
@@ -48,7 +71,7 @@ async function main(): Promise<void> {
     ) {
       const key = (
         process.env.TYPESAFE_API_KEY ||
-        (await cli.question("TypeSafe API key (input visible): "))
+        (await askSecret("TypeSafe API key (hidden while you type): "))
       ).trim();
       if (!key || /[\r\n]/.test(key))
         throw new Error("A TypeSafe API key is required.");
