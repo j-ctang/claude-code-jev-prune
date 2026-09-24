@@ -40,6 +40,10 @@ Express application
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
 | `src/utils/logger.ts` | Write redacted structured events to console and disk. |
 | `src/index.ts` | Compose dependencies, listen locally, and shut down gracefully. |
+| `jev-prune` | Install, build, and run setup when needed, then launch. |
+| `src/setup.ts` | Save the TypeSafe key and canary choice; install slash commands. |
+| `src/launch.ts` | Start or reuse the shared proxy, then run `claude` through it. |
+| `src/sessions.ts` | Count launchers so the last one to exit stops the proxy. |
 
 ## Candidate Pairing Invariants
 
@@ -61,7 +65,7 @@ The proxy applies protection before any content is sent to TypeSafe:
 - The newest `JEV_PRUNE_KEEP_RECENT` pairs are protected.
 - Tools named by `JEV_PRUNE_EXCLUDE_TOOLS` are protected.
 - Previously cached drops are not scored again.
-- Previously kept candidates are scored again because the latest user goal may differ.
+- Previously kept candidates are scored again when the latest user goal changes, or after configured context growth.
 
 The current goal is the newest nonempty user text that is not a tool result. If none exists, the proxy uses the neutral fallback `Complete the current task.`
 
