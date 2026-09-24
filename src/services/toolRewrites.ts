@@ -9,17 +9,6 @@ function field(input: unknown, name: string): unknown {
     : undefined;
 }
 
-function stableJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableJson).join(",")}]`;
-  if (typeof value === "object" && value !== null) {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`);
-    return `{${entries.join(",")}}`;
-  }
-  return JSON.stringify(value) ?? "null";
-}
-
 /**
  * Claude Code returns file content as `<line number>\t<text>` lines. Other
  * Read outputs (an "unchanged since your last Read" notice, an error) carry no
@@ -40,7 +29,6 @@ function supersededBy(older: ToolCandidate, newer: ToolCandidate): string | unde
     if (typeof path !== "string" || field(newer.input, "file_path") !== path) {
       return undefined;
     }
-    if (newer.toolName === "Write") return `a later Write of ${path}`;
     if (newer.toolName !== "Read" || !hasFileContent(newer.result)) {
       return undefined;
     }
@@ -49,20 +37,6 @@ function supersededBy(older: ToolCandidate, newer: ToolCandidate): string | unde
       field(older.input, "limit") === field(newer.input, "limit");
     return isWholeRead(newer.input) || sameRange
       ? `a later Read of ${path}`
-      : undefined;
-  }
-  if (older.toolName === "Bash") {
-    const command = field(older.input, "command");
-    return newer.toolName === "Bash" &&
-      typeof command === "string" &&
-      field(newer.input, "command") === command
-      ? `a later run of the same command`
-      : undefined;
-  }
-  if (older.toolName === "Grep" || older.toolName === "Glob") {
-    return newer.toolName === older.toolName &&
-      stableJson(newer.input) === stableJson(older.input)
-      ? `a later ${older.toolName} with the same input`
       : undefined;
   }
   return undefined;

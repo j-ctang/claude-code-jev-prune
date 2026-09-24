@@ -31,7 +31,7 @@ describe("findSuperseded", () => {
     ]);
   });
 
-  test("applies the same-range, Write, Bash, Grep and Glob rules", () => {
+  test("only replaces a read with a later successful read of the same range", () => {
     const stubs = findSuperseded([
       call("range-1", "Read", { file_path: "a.ts", offset: 1, limit: 5 }),
       call("range-2", "Read", { file_path: "a.ts", offset: 1, limit: 5 }),
@@ -45,11 +45,7 @@ describe("findSuperseded", () => {
       call("glob-2", "Glob", { pattern: "*.ts" }),
     ]);
 
-    expect([...stubs.keys()].sort()).toEqual(
-      ["bash-1", "glob-1", "grep-1", "range-1", "write-read"].sort(),
-    );
-    expect(stubs.get("bash-1")).toMatch(/same command/);
-    expect(stubs.get("write-read")).toMatch(/later Write of b\.ts/);
+    expect([...stubs.keys()]).toEqual(["range-1"]);
   });
 
   test("keeps reads that nothing later fully replaces", () => {
@@ -83,11 +79,22 @@ describe("findSuperseded", () => {
     expect([...stubs.keys()]).toEqual([]);
   });
 
+  test("keeps earlier output when a later write failed or a command is time varying", () => {
+    const stubs = findSuperseded([
+      call("read", "Read", { file_path: "a.ts" }),
+      call("failed-write", "Write", { file_path: "a.ts" }, "Permission denied"),
+      call("test-1", "Bash", { command: "npm test" }, "failed"),
+      call("test-2", "Bash", { command: "npm test" }, "passed"),
+    ]);
+
+    expect([...stubs.keys()]).toEqual([]);
+  });
+
   test("never stubs the newest call in a chain", () => {
     const stubs = findSuperseded([
-      call("one", "Bash", { command: "ls" }),
-      call("two", "Bash", { command: "ls" }),
-      call("three", "Bash", { command: "ls" }),
+      call("one", "Read", { file_path: "a.ts" }),
+      call("two", "Read", { file_path: "a.ts" }),
+      call("three", "Read", { file_path: "a.ts" }),
     ]);
 
     expect([...stubs.keys()]).toEqual(["one", "two"]);

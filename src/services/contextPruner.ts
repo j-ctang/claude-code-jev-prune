@@ -101,6 +101,7 @@ export class ContextPruner {
   private readonly keepCache = new Map<string, true>();
   private readonly rewriteCache = new Map<string, Rewrite>();
   private readonly lastFullScoreTokens = new Map<string, number>();
+  private readonly lastScoredGoals = new Map<string, string>();
   private readonly now: () => number;
   private readonly manualPrunes = new Map<string, number>();
   private readonly seenSessions = new Map<string, true>();
@@ -314,10 +315,12 @@ export class ContextPruner {
       // since the last full scoring (or the user runs /jev-prune), so stable
       // candidates are not re-sent to Jev on every turn.
       const sessionKey = options.sessionId ?? DEFAULT_SESSION;
+      const goal = this.latestUserGoal(request);
       const lastFull = this.lastFullScoreTokens.get(sessionKey);
       const fullRescore =
         manual ||
         lastFull === undefined ||
+        this.lastScoredGoals.get(sessionKey) !== goal ||
         rewrittenTokens - lastFull >= this.config.rescoreTokens;
       const toScore = fullRescore
         ? eligibleForScoring
@@ -339,7 +342,6 @@ export class ContextPruner {
 
       const newlyDroppedCandidates: ToolCandidate[] = [];
       if (toScore.length > 0) {
-        const goal = this.latestUserGoal(request);
         const scores = await this.scorer.score(goal, toScore);
         const cutoff = rewrittenTokens >= this.config.triggerTokens ? 0.7 : 0.5;
         const scoredCandidates = toScore.map((candidate) => {
@@ -382,6 +384,7 @@ export class ContextPruner {
           : this.rewriteRequest(request, droppedIds, rewrites);
       const afterTokens = estimateTokens(prunedRequest);
       if (fullRescore && toScore.length > 0) {
+        remember(this.lastScoredGoals, sessionKey, goal, MAX_TRACKED_SESSIONS);
         remember(
           this.lastFullScoreTokens,
           sessionKey,
@@ -504,8 +507,8 @@ export class ContextPruner {
 
   /**
    * A session seen for the first time that already has history is a resumed
-   * conversation. Its prompt cache has expired, so pruning now is free; below
-   * the automatic threshold, suggest /jev-prune instead of pruning unasked.
+   * conversation. Below the automatic threshold, suggest /jev-prune instead
+   * of pruning unasked. First sight does not prove its prompt cache expired.
    */
   private resumeNotice(
     result: PruneResult,
