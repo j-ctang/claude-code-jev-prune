@@ -35,7 +35,16 @@ jev-prune --resume
 jev-prune ~/other-project
 ```
 
-You can run it in several terminals at once. The proxy stops when the last one closes.
+You can run it in several terminals at once. The proxy stops when the last one closes, and restarts itself if it crashes. When a session ends, Jev Prune prints how much it pruned.
+
+Other commands:
+
+```bash
+jev-prune --stats    # how much stale context has been pruned so far
+jev-prune --doctor   # check the install and explain any problem
+jev-prune --update   # download the latest version
+jev-prune --setup    # answer the setup questions again
+```
 
 ## What happens during a session
 
@@ -43,6 +52,7 @@ You can run it in several terminals at once. The proxy stops when the last one c
 - **Manual:** Type `/jev-prune` to prune now.
 - Recent tool results and all normal conversation text are kept.
 - If TypeSafe is slow or down, your request goes through unchanged.
+- MCP tools still load on demand. Claude Code normally turns this off behind a proxy; `jev-prune` turns it back on (`ENABLE_TOOL_SEARCH=true`) and never prunes the results that load tools.
 
 ## Canary (optional)
 
@@ -59,15 +69,19 @@ Settings are in `.env` in this folder. The useful ones:
 | `JEV_PRUNE_ENABLED` | `true` | `false` passes everything through untouched |
 | `PORT` | `5590` | Local port for the proxy |
 
-All settings are listed in [.env.example](./.env.example). Run `jev-prune --setup` to answer the setup questions again.
+All settings are listed in [.env.example](./.env.example).
 
 ## Troubleshooting
+
+Run `jev-prune --doctor` first. It checks Node.js, Claude Code, your key, TypeSafe, the port, and settings that bypass the proxy.
 
 - **Logs:** `~/.claude/jev-prune.log`
 - **"Port 5590 is used by another program":** set a different `PORT` in `.env`.
 - **"`claude` was not found":** install Claude Code and check that `claude` runs in your terminal.
 - **Skip Jev Prune for a session:** run `claude` as usual.
-- **Using a custom `ANTHROPIC_BASE_URL`:** Jev Prune sends traffic on to it instead of the Anthropic API.
+- **Using a custom `ANTHROPIC_BASE_URL`:** Jev Prune sends traffic on to it instead of the Anthropic API. If it is set in `~/.claude/settings.json`, Claude Code skips the proxy; move it to `ANTHROPIC_UPSTREAM_URL` in `.env`.
+- **Bedrock or Vertex:** not supported. Claude Code skips the proxy when `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` is set.
+- **"Jev Prune was updated":** close all `jev-prune` sessions so the proxy restarts on the new version.
 
 ## Uninstall
 

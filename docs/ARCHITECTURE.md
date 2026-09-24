@@ -44,6 +44,9 @@ Express application
 | `src/setup.ts` | Save the TypeSafe key and canary choice; install slash commands. |
 | `src/launch.ts` | Start or reuse the shared proxy, then run `claude` through it. |
 | `src/sessions.ts` | Count launchers so the last one to exit stops the proxy. |
+| `src/proxyHealth.ts` | Read a running proxy's `/health` for the launcher and CLI tools. |
+| `src/stats.ts`, `src/logSummary.ts` | Report prune totals from the log and the running proxy. |
+| `src/doctor.ts` | Check the install and explain how to fix each problem. |
 
 ## Candidate Pairing Invariants
 
@@ -64,6 +67,7 @@ The proxy applies protection before any content is sent to TypeSafe:
 
 - The newest `JEV_PRUNE_KEEP_RECENT` pairs are protected.
 - Tools named by `JEV_PRUNE_EXCLUDE_TOOLS` are protected.
+- Results that contain `tool_reference` blocks (tool search) are protected, because removing them would unload deferred tool definitions.
 - Previously cached drops are not scored again.
 - Previously kept candidates are scored again when the latest user goal changes, or after configured context growth.
 
