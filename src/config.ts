@@ -16,6 +16,8 @@ export interface Config {
   trimMinTokens: number;
   trimKeepTokens: number;
   notify: boolean;
+  canaryPrefix?: string;
+  canaryAction?: "notice" | "prune";
   keepRecent: number;
   excludeTools: ReadonlySet<string>;
   debug: boolean;
@@ -61,6 +63,10 @@ function parseUrl(value: string, name: string): string {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv): Config {
+  const canaryAction = env.JEV_CANARY_ACTION ?? "notice";
+  if (canaryAction !== "notice" && canaryAction !== "prune") {
+    throw new Error("JEV_CANARY_ACTION must be notice or prune");
+  }
   const pruningEnabled = parseBoolean(
     env.JEV_PRUNE_ENABLED ?? "true",
     "JEV_PRUNE_ENABLED",
@@ -143,6 +149,8 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     trimMinTokens,
     trimKeepTokens,
     notify: parseBoolean(env.JEV_PRUNE_NOTIFY ?? "true", "JEV_PRUNE_NOTIFY"),
+    canaryPrefix: env.JEV_CANARY_PREFIX?.trim() ?? "",
+    canaryAction,
     keepRecent: parseInteger(
       env.JEV_PRUNE_KEEP_RECENT ?? "5",
       "JEV_PRUNE_KEEP_RECENT",

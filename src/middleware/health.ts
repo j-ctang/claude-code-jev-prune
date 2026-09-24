@@ -16,6 +16,7 @@ export function createHealthHandler(
     response.status(200).json({
       status: "ok",
       proxy_version: dependencies.version,
+      pid: process.pid,
       jev_configured: Boolean(dependencies.config.jevApiKey),
       pruning_enabled: dependencies.config.pruningEnabled,
       requests: dependencies.stats.requests,
