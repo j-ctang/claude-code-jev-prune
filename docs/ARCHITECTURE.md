@@ -41,7 +41,7 @@ Express application
 | `src/services/toolRewrites.ts` | Stub superseded Reads and trim large outputs without calling Jev. |
 | `src/services/turn.ts` | Read the latest turn: new user turn, goal, slash command, last reply. |
 | `src/services/canary.ts` | Watch the response canary and handle `/jev-prune-auto` commands. |
-| `src/middleware/proxy.ts` | Forward headers/body, track statistics, and stream upstream responses. |
+| `src/middleware/proxy.ts` | Forward headers/body, add notices for Claude, and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
 | `src/utils/logger.ts` | Write redacted structured events to console and disk. |
 | `src/index.ts` | Compose dependencies, listen locally, and shut down gracefully. |
@@ -51,7 +51,8 @@ Express application
 | `src/sessions.ts` | Count launchers so the last one to exit stops the proxy. |
 | `src/proxyClient.ts` | Find, start, watch, and stop the shared proxy through `/health`. |
 | `src/checkout.ts`, `src/installation.ts` | Hold every checkout and `~/.claude` path the launcher scripts use. |
-| `src/stats.ts`, `src/logSummary.ts` | Report prune totals from the log and the running proxy. |
+| `src/services/pruneLog.ts` | Record each prune in the counters and log, and read the log back for `--stats`. |
+| `src/stats.ts` | Report prune totals from the log and the running proxy. |
 | `src/doctor.ts` | Check the install and explain how to fix each problem. |
 
 ## Candidate Pairing Invariants

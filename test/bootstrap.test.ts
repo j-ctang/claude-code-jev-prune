@@ -36,3 +36,12 @@ test("one command sets up once and launches Claude on every run", () => {
   expect(rerunSetup.status).toBe(0);
   expect(readFileSync(log, "utf8")).toBe("install\nsetup\nlaunch\nlaunch\nsetup\nlaunch\nsetup\nlaunch\n");
 });
+
+test("the launcher script and config agree on the placeholder key", async () => {
+  const { PLACEHOLDER_KEY } = await import("../src/config.js");
+  const script = readFileSync(join(process.cwd(), "jev-prune"), "utf8");
+  const example = readFileSync(join(process.cwd(), ".env.example"), "utf8");
+
+  expect(script).toContain(`"${PLACEHOLDER_KEY}"`);
+  expect(example).toContain(`TYPESAFE_API_KEY=${PLACEHOLDER_KEY}`);
+});
