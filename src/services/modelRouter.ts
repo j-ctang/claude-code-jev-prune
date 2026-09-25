@@ -116,7 +116,12 @@ export class ModelRouter {
     if (turn.newUserTurn && turn.command !== "jev-route-auto") {
       state.askedHard = false;
     }
-    if (turn.command === "jev-route-auto" && state.askedHard) {
+    // A failed save keeps the question pending and the model unchanged.
+    if (
+      turn.command === "jev-route-auto" &&
+      state.askedHard &&
+      commandNotice !== SAVE_FAILED_NOTICE
+    ) {
       state.askedHard = false;
       this.switchTo(state, conversation, this.config.routeHardModel, "opt-in");
       return this.decision(

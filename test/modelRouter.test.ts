@@ -355,6 +355,31 @@ describe("ModelRouter in ask mode", () => {
     expect(later.notice).not.toContain("continue their previous request");
   });
 
+  test("a failed save does not switch up", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
+    const mode = new RouteMode(path);
+    mode.set = () => {
+      throw new Error("disk full");
+    };
+    const subject = new ModelRouter(
+      config,
+      scriptedAsker({ hard: 0.9, continues: 0 }),
+      mode,
+      silentLogger,
+    );
+
+    await subject.route(turn(["Redesign auth"]), "s");
+    const accepted = await subject.route(
+      turn(["Redesign auth", command("jev-route-auto")]),
+      "s",
+    );
+
+    expect(accepted).toEqual({
+      conversation: conversationKey(turn(["Redesign auth"]), "s"),
+      notice: "[jev-prune] Could not save the model routing setting.",
+    });
+  });
+
   test("/jev-route-auto with nothing pending only saves the choice", async () => {
     const { router: subject } = await router(scriptedAsker());
 
