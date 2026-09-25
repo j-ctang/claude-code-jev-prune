@@ -91,6 +91,8 @@ export class ModelRouter {
     private readonly asker: NoulAsker,
     private readonly mode: RouteMode,
     private readonly logger: AppLogger,
+    /** Tests lower this to check eviction. */
+    private readonly maxConversations = MAX_CONVERSATIONS,
   ) {}
 
   async route(
@@ -244,20 +246,23 @@ export class ModelRouter {
   }
 
   private stateFor(conversation: string): ConversationState {
-    let state = this.conversations.get(conversation);
-    if (!state) {
-      state = {
-        model: this.config.routeDefaultModel,
-        unavailable: false,
-        askedHard: false,
-      };
-      this.conversations.set(conversation, state);
-      if (this.conversations.size > MAX_CONVERSATIONS) {
-        const oldest = this.conversations.keys().next().value;
-        if (oldest !== undefined) this.conversations.delete(oldest);
-      }
-    }
+    const state = this.conversations.get(conversation) ?? {
+      model: this.config.routeDefaultModel,
+      unavailable: false,
+      askedHard: false,
+    };
+    this.remember(this.conversations, conversation, state);
     return state;
+  }
+
+  /** Map order is recency: re-insert on use, drop the least recent. */
+  private remember<T>(map: Map<string, T>, key: string, value: T): void {
+    map.delete(key);
+    map.set(key, value);
+    if (map.size > this.maxConversations) {
+      const oldest = map.keys().next().value;
+      if (oldest !== undefined) map.delete(oldest);
+    }
   }
 
   private decision(

@@ -252,6 +252,29 @@ describe("ModelRouter in auto mode", () => {
   });
 });
 
+describe("ModelRouter memory", () => {
+  test("evicts the least recently used conversation", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
+    const mode = new RouteMode(path);
+    mode.set("auto");
+    const subject = new ModelRouter(
+      config,
+      scriptedAsker({ hard: 0.9, continues: 0 }),
+      mode,
+      silentLogger,
+      2,
+    );
+
+    await subject.route(turn(["Redesign auth"]), "s");
+    await subject.route(turn(["Find the config file"]), "s");
+    await subject.route(toolLoop(["Redesign auth"]), "s");
+    await subject.route(turn(["List the tests"]), "s");
+    const loop = await subject.route(toolLoop(["Redesign auth"]), "s");
+
+    expect(loop.model).toBe(HARD);
+  });
+});
+
 describe("ModelRouter in ask mode", () => {
   test("asks on a hard prompt, then switches up on /jev-route-auto", async () => {
     const { router: subject, path } = await router(
