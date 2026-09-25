@@ -8,6 +8,7 @@ import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
 import { CanaryPolicy } from "../services/canary.js";
 import type { PruneOptions } from "../services/contextPruner.js";
+import { recordPruneOutcome } from "../services/pruneLog.js";
 import { appendNotice } from "../services/turn.js";
 
 interface RequestPruner {
@@ -139,39 +140,12 @@ async function forward(
       canary.notice && dependencies.config.notify
         ? appendNotice(result.request, canary.notice)
         : result.request;
-    dependencies.stats.pruningDecisions += result.evaluated;
-    dependencies.stats.droppedPairs += result.dropped;
-    if (result.reason === "fail-open") {
-      dependencies.stats.failOpenEvents += 1;
-      dependencies.logger.warn("prune_fail_open", {
-        error: result.failureReason ?? "unknown pruning error",
-        durationMs: Date.now() - startedAt,
-      });
-    } else if (result.resumed) {
-      dependencies.logger.info("resume_notice", {
-        tokens: result.afterTokens,
-      });
-    } else if (result.reason === "pruned") {
-      dependencies.stats.prunes += 1;
-      dependencies.stats.tokensRemoved += result.removedTokens ?? 0;
-      dependencies.logger.info("prune_complete", {
-        beforeTokens: result.beforeTokens,
-        afterTokens: result.afterTokens,
-        evaluated: result.evaluated,
-        dropped: result.dropped,
-        removedTokens: result.removedTokens ?? 0,
-        superseded: result.superseded ?? 0,
-        trimmed: result.trimmed ?? 0,
-        manual: result.manual ?? false,
-        durationMs: Date.now() - startedAt,
-      });
-      if (result.aboveTarget) {
-        dependencies.logger.warn("prune_above_target", {
-          afterTokens: result.afterTokens,
-          targetTokens: dependencies.config.targetTokens,
-        });
-      }
-    }
+    recordPruneOutcome(result, {
+      stats: dependencies.stats,
+      logger: dependencies.logger,
+      targetTokens: dependencies.config.targetTokens,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   const headers = requestHeaders(request);

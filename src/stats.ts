@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { parsePort } from "./config.js";
 import { loadInstallEnv, localProxyClient } from "./checkout.js";
 import { logPath } from "./installation.js";
-import { summarizeLog } from "./logSummary.js";
+import { summarizeLog } from "./services/pruneLog.js";
 import { formatTokens } from "./proxyClient.js";
 
 async function main(): Promise<void> {
