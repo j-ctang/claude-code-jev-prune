@@ -2,14 +2,14 @@ import type { Config } from "../config.js";
 import type { AnthropicRequest } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { CanaryMode } from "./canaryMode.js";
-import { lastTurnIndex, messageText } from "./messages.js";
+import { readTurn, type Turn } from "./turn.js";
 
 interface CanaryState {
   lastReply: string;
   misses: number;
 }
 
-/** Checks completed assistant text carried into the next user request. */
+/** Counts consecutive finished replies that miss the configured prefix. */
 export class CanaryMonitor {
   private readonly sessions = new Map<string, CanaryState>();
 
@@ -19,27 +19,9 @@ export class CanaryMonitor {
     return this.prefix !== "";
   }
 
-  observe(sessionId: string, request: AnthropicRequest): boolean {
-    if (!this.enabled) return false;
-    const current = request.messages[lastTurnIndex(request)];
-    if (current?.role !== "user") return false;
-    if (
-      Array.isArray(current.content) &&
-      current.content.some((block) => block.type === "tool_result")
-    )
-      return false;
-    const reply = [...request.messages]
-      .reverse()
-      .find((message) => message.role === "assistant");
-    if (
-      !reply ||
-      (Array.isArray(reply.content) &&
-        reply.content.some((block) => block.type === "tool_use"))
-    ) {
-      return false;
-    }
-    const text = messageText(reply);
-    if (!text.trim()) return false;
+  observe(sessionId: string, turn: Turn): boolean {
+    const text = turn.lastReply;
+    if (!this.enabled || text === undefined) return false;
     const previous = this.sessions.get(sessionId);
     if (previous?.lastReply === text) return false;
     const matched = text.trimStart().startsWith(this.prefix);
@@ -56,19 +38,13 @@ export interface CanaryDecision {
   notice?: string | undefined;
 }
 
+const AUTO_COMMANDS: Record<string, boolean | undefined> = {
+  "jev-prune-auto": true,
+  "jev-prune-auto-off": false,
+};
+
 const MISS_NOTICE =
   "[jev-prune] The configured response prefix was missed again. This is an advisory signal; run /jev-prune now or /jev-prune-auto to prune automatically on future misses.";
-
-function autoPruneCommand(request: AnthropicRequest): boolean | undefined {
-  const last = [...request.messages]
-    .reverse()
-    .find((message) => message.role === "user");
-  const text = last ? messageText(last) : "";
-  if (/<command-name>\/jev-prune-auto<\/command-name>/.test(text)) return true;
-  if (/<command-name>\/jev-prune-auto-off<\/command-name>/.test(text))
-    return false;
-  return undefined;
-}
 
 /**
  * Decides what a missed response canary means for one request: handles the
@@ -90,10 +66,9 @@ export class CanaryPolicy {
   }
 
   check(request: AnthropicRequest, sessionId?: string): CanaryDecision {
-    const commandNotice = this.applyCommand(request);
-    const missed = Boolean(
-      sessionId && this.monitor.observe(sessionId, request),
-    );
+    const turn = readTurn(request);
+    const commandNotice = this.applyCommand(turn.command);
+    const missed = Boolean(sessionId && this.monitor.observe(sessionId, turn));
     if (missed && this.mode.autoPrune) {
       this.logger.warn("canary_prune_requested", { sessionId });
       return { prune: true, notice: commandNotice };
@@ -105,8 +80,8 @@ export class CanaryPolicy {
     };
   }
 
-  private applyCommand(request: AnthropicRequest): string | undefined {
-    const enable = autoPruneCommand(request);
+  private applyCommand(command: string | undefined): string | undefined {
+    const enable = AUTO_COMMANDS[command ?? ""];
     if (enable === undefined || !this.monitor.enabled) return undefined;
     try {
       this.mode.setAutoPrune(enable);

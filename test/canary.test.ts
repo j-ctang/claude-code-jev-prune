@@ -1,5 +1,14 @@
 import { CanaryMonitor } from "../src/services/canary.js";
+import { readTurn } from "../src/services/turn.js";
 import type { AnthropicRequest } from "../src/types.js";
+
+function observe(
+  monitor: CanaryMonitor,
+  sessionId: string,
+  request: AnthropicRequest,
+): boolean {
+  return monitor.observe(sessionId, readTurn(request));
+}
 
 function turn(reply: string): AnthropicRequest {
   return {
@@ -13,13 +22,13 @@ function turn(reply: string): AnthropicRequest {
 
 test("signals on every distinct missed reply after the second", () => {
   const monitor = new CanaryMonitor("Yo:");
-  expect(monitor.observe("s", turn("First reply"))).toBe(false);
-  expect(monitor.observe("s", turn("First reply"))).toBe(false);
+  expect(observe(monitor, "s", turn("First reply"))).toBe(false);
+  expect(observe(monitor, "s", turn("First reply"))).toBe(false);
   const second = turn("Second reply");
   second.messages.splice(-1, 0, { role: "user", content: "One more thing" });
-  expect(monitor.observe("s", second)).toBe(true);
-  expect(monitor.observe("s", turn("Third reply"))).toBe(true);
-  expect(monitor.observe("s", turn("Yo: back on track"))).toBe(false);
+  expect(observe(monitor, "s", second)).toBe(true);
+  expect(observe(monitor, "s", turn("Third reply"))).toBe(true);
+  expect(observe(monitor, "s", turn("Yo: back on track"))).toBe(false);
 });
 
 test("ignores tool calls and other sessions", () => {
@@ -33,11 +42,11 @@ test("ignores tool calls and other sessions", () => {
       { role: "user", content: "Continue" },
     ],
   };
-  expect(monitor.observe("a", toolTurn)).toBe(false);
-  expect(monitor.observe("a", turn("Missing"))).toBe(false);
-  expect(monitor.observe("b", turn("Missing"))).toBe(false);
+  expect(observe(monitor, "a", toolTurn)).toBe(false);
+  expect(observe(monitor, "a", turn("Missing"))).toBe(false);
+  expect(observe(monitor, "b", turn("Missing"))).toBe(false);
   expect(
-    monitor.observe("a", {
+    observe(monitor, "a", {
       messages: [
         { role: "assistant", content: "Another missing prefix" },
         {
@@ -55,6 +64,6 @@ test("checks a completed reply when hook context follows the user turn", () => {
   const second = turn("Missing two");
   first.messages.push({ role: "system", content: "hook context" });
   second.messages.push({ role: "system", content: "hook context" });
-  expect(monitor.observe("s", first)).toBe(false);
-  expect(monitor.observe("s", second)).toBe(true);
+  expect(observe(monitor, "s", first)).toBe(false);
+  expect(observe(monitor, "s", second)).toBe(true);
 });

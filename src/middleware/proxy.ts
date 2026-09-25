@@ -7,7 +7,7 @@ import type { AnthropicRequest, PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
 import { CanaryPolicy } from "../services/canary.js";
-import { appendNotice } from "../services/messages.js";
+import { appendNotice } from "../services/turn.js";
 
 interface RequestPruner {
   prune(

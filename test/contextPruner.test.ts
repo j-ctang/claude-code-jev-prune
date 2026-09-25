@@ -821,6 +821,35 @@ describe("ContextPruner", () => {
       );
     });
 
+    test("drops a stubbed output when the later Read it points to is dropped", async () => {
+      const pruner = new ContextPruner({
+        config: rewriteConfig({ keepRecent: 0, trim: false }),
+        scorer: scorerReturning({ "bash-big": 0.9, "read-2": 0.1 }),
+      });
+
+      const result = await pruner.prune(conversation(pairs));
+
+      expect(allToolUseIds(result.request)).toEqual(["bash-big"]);
+      expect(allToolResultIds(result.request)).toEqual(["bash-big"]);
+    });
+
+    test("drops a stubbed output when its later Read is dropped on a later turn", async () => {
+      const scores: Record<string, number> = { "bash-big": 0.9, "read-2": 0.9 };
+      const pruner = new ContextPruner({
+        config: rewriteConfig({ keepRecent: 0, trim: false }),
+        scorer: scorerReturning(scores),
+      });
+      const first = await pruner.prune(conversation(pairs));
+      expect(first.superseded).toBe(1);
+
+      scores["read-2"] = 0.1;
+      const second = await pruner.prune(conversation(pairs, "Now look at billing."));
+      const third = await pruner.prune(conversation(pairs, "Now look at billing."));
+
+      expect(allToolUseIds(second.request)).toEqual(["bash-big"]);
+      expect(allToolUseIds(third.request)).toEqual(["bash-big"]);
+    });
+
     test("keeps repeated Bash output and its cache_control", async () => {
       const pruner = new ContextPruner({
         config: rewriteConfig({ keepRecent: 5 }),

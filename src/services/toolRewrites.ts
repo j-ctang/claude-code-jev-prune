@@ -42,22 +42,29 @@ function supersededBy(older: ToolCandidate, newer: ToolCandidate): string | unde
   return undefined;
 }
 
+export interface Superseded {
+  /** Text that replaces the out-of-date output. */
+  stub: string;
+  /** Tool-use ID of the later call the stub points to. */
+  by: string;
+}
+
 /**
  * Finds tool results made out of date by a later call. `candidates` must be in
- * conversation order. Returns tool-use ID to the stub text replacing its output.
+ * conversation order. Returns tool-use ID to its stub.
  */
 export function findSuperseded(
   candidates: readonly ToolCandidate[],
-): Map<string, string> {
-  const stubs = new Map<string, string>();
+): Map<string, Superseded> {
+  const stubs = new Map<string, Superseded>();
   candidates.forEach((older, index) => {
     for (const newer of candidates.slice(index + 1)) {
       const reason = supersededBy(older, newer);
       if (reason) {
-        stubs.set(
-          older.toolUseId,
-          `[jev-prune] Output removed: superseded by ${reason}.`,
-        );
+        stubs.set(older.toolUseId, {
+          stub: `[jev-prune] Output removed: superseded by ${reason}.`,
+          by: newer.toolUseId,
+        });
         return;
       }
     }
