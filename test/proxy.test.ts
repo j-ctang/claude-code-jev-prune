@@ -130,6 +130,175 @@ afterEach(async () => {
 });
 
 describe("Anthropic proxy", () => {
+  test("suggests manual pruning after repeated configured canary misses", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const app = appFor(
+      upstream.url,
+      {
+        async score() {
+          return new Map();
+        },
+      },
+      {
+        canaryPrefix: "Yo:",
+        pruneThreshold: 1_000_000,
+        notify: true,
+      },
+    );
+    const first: AnthropicRequest = {
+      messages: [
+        { role: "assistant", content: "First reply" },
+        { role: "user", content: "Continue" },
+      ],
+    };
+    const second: AnthropicRequest = {
+      messages: [
+        ...first.messages.slice(0, 1),
+        { role: "user", content: "Another request" },
+        { role: "assistant", content: "Second reply" },
+        { role: "user", content: "Continue again" },
+      ],
+    };
+    await request(app)
+      .post("/v1/messages")
+      .set("x-claude-code-session-id", "s")
+      .send(first);
+    await request(app)
+      .post("/v1/messages")
+      .set("x-claude-code-session-id", "s")
+      .send(second);
+
+    expect(JSON.stringify(upstream.requests[1]?.body)).toContain("/jev-prune");
+  });
+
+  test("automatically requests a prune on the second canary miss when opted in", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const app = appFor(
+      upstream.url,
+      {
+        async score(_goal, candidates) {
+          return new Map(
+            candidates.map((candidate) => [candidate.toolUseId, 0.1]),
+          );
+        },
+      },
+      {
+        canaryPrefix: "Yo:",
+        canaryAction: "prune",
+        pruneThreshold: 1_000_000,
+      },
+    );
+    const first = structuredClone(twoToolRequest);
+    first.messages.splice(-1, 0, { role: "assistant", content: "First reply" });
+    const second = structuredClone(first);
+    second.messages.splice(-1, 0, {
+      role: "assistant",
+      content: "Second reply",
+    });
+
+    await request(app)
+      .post("/v1/messages")
+      .set("x-claude-code-session-id", "s")
+      .send(first);
+    await request(app)
+      .post("/v1/messages")
+      .set("x-claude-code-session-id", "s")
+      .send(second);
+
+    expect(
+      allToolUseIds(upstream.requests[0]?.body as AnthropicRequest),
+    ).toEqual(["call-old", "call-new"]);
+    expect(
+      allToolUseIds(upstream.requests[1]?.body as AnthropicRequest),
+    ).toEqual([]);
+  });
+
+  test("slash command enables automatic canary pruning for future misses", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const statePath = join(
+      await mkdtemp(join(tmpdir(), "jev-canary-command-")),
+      "state.json",
+    );
+    const app = appFor(
+      upstream.url,
+      {
+        async score(_goal, candidates) {
+          return new Map(
+            candidates.map((candidate) => [candidate.toolUseId, 0.1]),
+          );
+        },
+      },
+      {
+        canaryPrefix: "Yo:",
+        canaryAction: "notice",
+        pruneThreshold: 1_000_000,
+        statePath,
+      },
+    );
+    await request(app)
+      .post("/v1/messages")
+      .set("x-claude-code-session-id", "s")
+      .send({
+        messages: [
+          {
+            role: "user",
+            content: "<command-name>/jev-prune-auto</command-name>",
+          },
+        ],
+      });
+    const first = structuredClone(twoToolRequest);
+    first.messages.splice(-1, 0, { role: "assistant", content: "First reply" });
+    const second = structuredClone(first);
+    second.messages.splice(-1, 0, {
+      role: "assistant",
+      content: "Second reply",
+    });
+    await request(app)
+      .post("/v1/messages")
+      .set("x-claude-code-session-id", "s")
+      .send(first);
+    await request(app)
+      .post("/v1/messages")
+      .set("x-claude-code-session-id", "s")
+      .send(second);
+
+    expect(
+      allToolUseIds(upstream.requests[2]?.body as AnthropicRequest),
+    ).toEqual([]);
+  });
+
+  test("slash command returns automatic canary handling to suggestions", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const statePath = join(await mkdtemp(join(tmpdir(), "jev-canary-off-")), "state.json");
+    const app = appFor(upstream.url, {
+      async score(_goal, candidates) {
+        return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.1]));
+      },
+    }, { canaryPrefix: "Yo:", canaryAction: "prune", pruneThreshold: 1_000_000, statePath });
+    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s")
+      .send({ messages: [{ role: "user", content: "<command-name>/jev-prune-auto-off</command-name>" }] });
+    const first = structuredClone(twoToolRequest);
+    first.messages.splice(-1, 0, { role: "assistant", content: "First reply" });
+    const second = structuredClone(first);
+    second.messages.splice(-1, 0, { role: "assistant", content: "Second reply" });
+    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s").send(first);
+    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s").send(second);
+
+    expect(allToolUseIds(upstream.requests[2]?.body as AnthropicRequest)).toEqual(["call-old", "call-new"]);
+  });
+
   test("forwards Anthropic headers and the pruned messages body", async () => {
     const upstream = await startUpstream((_incoming, response) => {
       response.writeHead(200, { "content-type": "application/json" });
@@ -403,6 +572,29 @@ describe("Anthropic proxy", () => {
     expect(response.body).toEqual({ error: "Anthropic upstream unavailable" });
   });
 
+  test("counts prunes and newly removed tokens in health", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const app = appFor(upstream.url, {
+      async score(_goal, candidates) {
+        return new Map(
+          candidates.map((candidate) => [
+            candidate.toolUseId,
+            candidate.toolUseId === "call-old" ? 0 : 1,
+          ]),
+        );
+      },
+    });
+
+    await request(app).post("/v1/messages").send(twoToolRequest);
+    const health = await request(app).get("/health");
+
+    expect(health.body.prunes).toBe(1);
+    expect(health.body.tokens_removed).toBeGreaterThan(0);
+  });
+
   test("reports process health and live counters", async () => {
     const upstream = await startUpstream((_incoming, response) => {
       response.end("{}");
@@ -412,6 +604,8 @@ describe("Anthropic proxy", () => {
       pruningDecisions: 3,
       droppedPairs: 2,
       failOpenEvents: 1,
+      prunes: 4,
+      tokensRemoved: 5_000,
     };
     const config = testConfig(upstream.url);
     const pruner = new ContextPruner({
@@ -434,12 +628,16 @@ describe("Anthropic proxy", () => {
     expect(response.body).toEqual({
       status: "ok",
       proxy_version: "9.8.7-test",
+      pid: process.pid,
       jev_configured: true,
       pruning_enabled: true,
       requests: 7,
       pruning_decisions: 3,
       dropped_pairs: 2,
       fail_open_events: 1,
+      prunes: 4,
+      tokens_removed: 5_000,
+      started_at: expect.any(String),
       uptime_seconds: expect.any(Number),
     });
     expect(response.body.uptime_seconds).toBeGreaterThanOrEqual(42);

@@ -1,226 +1,100 @@
 # Jev Prune for Claude Code
 
-A local HTTP proxy that removes stale Claude tool-call context without summarizing retained messages.
+Jev Prune keeps long Claude Code sessions sharp. It removes old tool results (big file reads, long terminal output) that no longer matter to what you are doing now. Your chat history in the terminal stays the same; only the context sent to Claude gets smaller.
 
-Claude Code sends Anthropic Messages API requests to this proxy. Once a request reaches a configurable estimated-token threshold, the proxy asks TypeSafe Jev whether older, matched tool calls are still relevant to the latest user goal. Low-relevance `tool_use` and `tool_result` blocks are removed as pairs, and the cleaned request is forwarded to Anthropic.
+It runs on your machine as a small proxy between Claude Code and Anthropic.
 
-## Status
+## Install
 
-The proxy, pruning engine, TypeSafe client, health endpoint, logging, streaming transport, and automated tests are implemented. The default test suite uses local fakes and does not require API keys. A live Jev validation with a user-supplied key remains an explicit pre-release step.
-
-This project is an HTTP proxy, not an MCP server or MCP plugin.
-
-## Safety Properties
-
-- Only uniquely matched assistant `tool_use` and user `tool_result` blocks are eligible for removal.
-- Both halves of an eligible tool pair are removed together.
-- System content, ordinary user/assistant text, unmatched tools, duplicate IDs, malformed blocks, recent tools, and excluded tools are preserved.
-- Retained JSON values are not rewritten or summarized. JSON whitespace and object-key ordering may change when the request is serialized.
-- TypeSafe timeouts, HTTP errors, malformed answers, and missing scores fail open: Anthropic receives the original request.
-- Anthropic response statuses and server-sent event streams are relayed to Claude Code.
-
-## Requirements
-
-- Node.js 20 or newer
-- A TypeSafe API key when pruning is enabled
-- Whatever Anthropic authentication Claude Code normally sends
-
-## Installation
+You need Node.js 20+, [Claude Code](https://docs.claude.com/en/docs/claude-code), and a TypeSafe API key.
 
 ```bash
 git clone https://github.com/j-ctang/claude-code-jev-prune
 cd claude-code-jev-prune
-npm install
-cp .env.example .env
+npm link
 ```
 
-Edit `.env` and set your TypeSafe key:
+`npm link` adds a `jev-prune` command you can run from any folder. To skip it, run `./jev-prune` from this folder instead.
 
-```dotenv
-TYPESAFE_API_KEY=tsf_replace_with_your_key
-JEV_PRUNE_ENABLED=true
-PORT=5590
-```
+## Use
 
-Build and start the proxy:
+Use `jev-prune` wherever you used `claude`:
 
 ```bash
-npm run build
-npm start
+cd ~/my-project
+jev-prune
 ```
 
-In a separate terminal, point Claude Code at the local proxy:
+The first run asks for your TypeSafe key, then opens Claude Code. After that it opens Claude Code right away.
+
+Claude Code options work the same way:
 
 ```bash
-export ANTHROPIC_BASE_URL=http://127.0.0.1:5590
-claude
+jev-prune --continue
+jev-prune --resume
+jev-prune ~/other-project
 ```
 
-The proxy forwards requests to `https://api.anthropic.com` by default. Its upstream setting is deliberately named `ANTHROPIC_UPSTREAM_URL`, so it cannot be confused with the `ANTHROPIC_BASE_URL` that Claude Code uses to reach the proxy.
+You can run it in several terminals at once. The proxy stops when the last one closes, and restarts itself if it crashes. When a session ends, Jev Prune prints how much it pruned.
 
-See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for pairing invariants, failure handling, and transport details.
+Other commands:
 
-## Configuration
+```bash
+jev-prune --stats    # how much stale context has been pruned so far
+jev-prune --doctor   # check the install and explain any problem
+jev-prune --update   # download the latest version
+jev-prune --setup    # answer the setup questions again
+```
 
-| Variable | Default | Meaning |
+## What happens during a session
+
+- **Automatic:** When the context reaches about 120K tokens, Jev Prune removes stale tool results the next time you send a prompt. It never prunes while Claude is in the middle of a task.
+- **Manual:** Type `/jev-prune` to prune now.
+- Recent tool results and all normal conversation text are kept.
+- If TypeSafe is slow or down, your request goes through unchanged.
+- MCP tools still load on demand. Claude Code normally turns this off behind a proxy; `jev-prune` turns it back on (`ENABLE_TOOL_SEARCH=true`) and never prunes the results that load tools.
+
+## Canary (optional)
+
+If your `CLAUDE.md` tells Claude to start every reply with a fixed word, setup can use it as a canary. When Claude stops using it, Jev Prune suggests `/jev-prune`. Type `/jev-prune-auto` to prune on those misses automatically, or `/jev-prune-auto-off` to go back to suggestions.
+
+## Settings
+
+Settings are in `.env` in this folder. The useful ones:
+
+| Setting | Default | What it does |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | none | Required when pruning is enabled. Sent only to TypeSafe. |
-| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai` | TypeSafe API origin. |
-| `JEV_MODEL` | `jev-latest` | Model name sent to `/v1/systemone`. |
-| `JEV_PRUNE_ENABLED` | `true` | Enables relevance scoring and pruning. |
-| `JEV_PRUNE_THRESHOLD` | `120000` | Estimated tokens at which pruning runs on the next new user turn. |
-| `JEV_PRUNE_TRIGGER_TOKENS` | `140000` | Estimated tokens at which the aggressive cutoff is used. |
-| `JEV_PRUNE_TARGET_TOKENS` | `80000` | Size a prune aims for. Above it, the proxy warns and suggests a handoff. |
-| `JEV_PRUNE_RESCORE_TOKENS` | `20000` | Growth since the last full scoring before kept tool results are scored again. |
-| `JEV_PRUNE_RESUME_NOTICE_TOKENS` | `60000` | A resumed conversation at or above this size (and below the threshold) gets a one-time `/jev-prune` suggestion. `0` disables it. |
-| `JEV_PRUNE_STATE_PATH` | `~/.claude/jev-prune-state.json` | Where pruning decisions are saved so they survive a proxy restart. |
-| `JEV_PRUNE_SUPERSEDE` | `true` | Replace tool output made out of date by a later call with a one-line stub. |
-| `JEV_PRUNE_TRIM` | `true` | Trim very large outputs Claude has already seen. |
-| `JEV_PRUNE_TRIM_TOOLS` | `Bash` | Comma-separated tools eligible for trimming. `Read` is never trimmed. |
-| `JEV_PRUNE_TRIM_MIN_TOKENS` | `10000` | Outputs larger than this are trimmed. |
-| `JEV_PRUNE_TRIM_KEEP_TOKENS` | `2000` | Tokens kept at the start and again at the end of a trimmed output. Must be less than half of the minimum. |
-| `JEV_PRUNE_NOTIFY` | `true` | Appends a one-line pruning notice to the new user turn so Claude can tell the user. |
-| `JEV_PRUNE_KEEP_RECENT` | `5` | Number of newest matched tool pairs never evaluated or removed. |
-| `JEV_PRUNE_EXCLUDE_TOOLS` | empty | Comma-separated tool names never evaluated or removed. |
-| `JEV_TIMEOUT_MS` | `2000` | Timeout for each TypeSafe batch. |
-| `JEV_PRUNE_DEBUG` | `false` | Logs safe per-decision metadata: tool name/ID, score, cutoff, and outcome. |
-| `ANTHROPIC_UPSTREAM_URL` | `https://api.anthropic.com` | Anthropic-compatible upstream used by the proxy. |
-| `PORT` | `5590` | Local listening port. |
+| `JEV_PRUNE_THRESHOLD` | `120000` | Context size that starts automatic pruning |
+| `JEV_PRUNE_KEEP_RECENT` | `5` | Newest tool results that are never pruned |
+| `JEV_PRUNE_ENABLED` | `true` | `false` passes everything through untouched |
+| `PORT` | `5590` | Local port for the proxy |
 
-All integer and boolean values are validated at startup. The aggressive threshold must be greater than or equal to the normal threshold, and the target must be less than or equal to it.
-
-## Decision Policy
-
-The proxy estimates tokens as `ceil(JSON.stringify(request).length / 4)`. This is a deterministic trigger heuristic, not Anthropic's billing-token count.
-
-- Earlier drop decisions are re-applied to every request, so the pruned prefix stays identical and keeps its prompt-cache discount.
-- Below `JEV_PRUNE_THRESHOLD` (after earlier drops): forward without contacting TypeSafe.
-- Mid-task requests (the last message is a `tool_result`) are never scored. Pruning waits for the next new user turn so it never cuts context the agent is using.
-- On a new user turn at or above `JEV_PRUNE_THRESHOLD`: drop eligible pairs with relevance below `0.50`.
-- At or above `JEV_PRUNE_TRIGGER_TOKENS`: drop eligible pairs with relevance below `0.70`.
-- After a prune, the proxy logs `prune_complete`. If the result is still above `JEV_PRUNE_TARGET_TOKENS`, it also logs `prune_above_target`, and the notice suggests writing a handoff file for a fresh session.
-
-The proxy will not delete protected content merely to hit the target.
-
-Jev requests contain no more than 32 named `noul` questions per batch. Drop decisions are cached by a fingerprint of the tool-use ID, name, input, and result. Keep decisions are remembered too: between full scorings, only tool results Jev has not seen are sent. Kept results are scored again once the context grows by `JEV_PRUNE_RESCORE_TOKENS` since the last full scoring, or when you run `/jev-prune`, because the task goal may have changed.
-
-Each `/v1/messages` response is logged as `anthropic_usage` with Anthropic's real `input_tokens`, `cache_read_input_tokens`, and `cache_creation_input_tokens`.
-
-## Superseded and Trimmed Outputs
-
-Before asking Jev, each prune applies two mechanical rewrites. Both keep the tool call and every other field on the result block; only the output text changes.
-
-- **Superseded outputs** become a one-line stub. An output is superseded when a later call makes it out of date: a later whole-file `Read` (or same-range `Read`) or `Write` of the same path, a later `Bash` with the identical command, or a later `Grep`/`Glob` with identical input. A later `Read` counts only when it returns file content, not Claude Code's "file unchanged" notice or an error. An `Edit` does not supersede a read. The newest call is never stubbed. This ignores `JEV_PRUNE_KEEP_RECENT`, because a newer copy always exists.
-- **Large outputs** from `JEV_PRUNE_TRIM_TOOLS` over `JEV_PRUNE_TRIM_MIN_TOKENS` keep their first and last `JEV_PRUNE_TRIM_KEEP_TOKENS`, cut on line breaks, with a marker telling Claude to re-run the command for the full output. Only outputs outside the newest `JEV_PRUNE_KEEP_RECENT` are trimmed, so Claude has read them whole.
-
-Superseded outputs are not sent to Jev; trimmed outputs are scored in their short form. Rewrites are saved with the other decisions and re-applied to every request, mid-task and after restarts.
-
-## Manual Pruning
-
-Run `/jev-prune` in Claude Code to prune immediately, even below `JEV_PRUNE_THRESHOLD`. Install the command once:
-
-```bash
-mkdir -p ~/.claude/commands
-cp commands/jev-prune.md ~/.claude/commands/
-```
-
-The proxy recognizes the command in the request itself, prunes that turn, and attaches a notice that Claude reports back. If nothing is eligible (the newest `JEV_PRUNE_KEEP_RECENT` pairs are always kept), the notice says so.
-
-Scripts can queue the same thing for a session's next user turn:
-
-```bash
-curl -X POST http://127.0.0.1:5590/jev-prune/prune-next \
-  -H 'content-type: application/json' \
-  -d "{\"sessionId\":\"$CLAUDE_CODE_SESSION_ID\"}"
-```
-
-The session is matched against Claude Code's `x-claude-code-session-id` request header. Queued requests expire after ten minutes.
-
-## Restarts and Resumed Conversations
-
-Drop and keep decisions, the size at each session's last full scoring, and the sessions already seen are saved to `JEV_PRUNE_STATE_PATH` (mode `0600`). The file stores hashed fingerprints and Claude Code session IDs, never message content. After a restart, earlier drops are re-applied, so live conversations keep their pruned history and prompt cache.
-
-A session the proxy has never seen that already has history is a resumed conversation, and its prompt cache has expired, so pruning costs no cache discount. At or above `JEV_PRUNE_THRESHOLD`, it is pruned automatically as usual. Between `JEV_PRUNE_RESUME_NOTICE_TOKENS` and the threshold, the proxy attaches a one-time note, and Claude suggests running `/jev-prune`.
-
-## Privacy Boundary
-
-When pruning activates, the following data is sent to TypeSafe:
-
-- The latest non-tool user text used as the current goal
-- Each eligible tool name and tool-use ID
-- Each eligible tool input
-- Each eligible tool result
-
-The TypeSafe API key is never forwarded to Anthropic. Anthropic credentials and request headers are never sent to TypeSafe. Proxy logs do not contain authorization headers, full prompts, tool inputs, tool results, or upstream response bodies.
-
-Review TypeSafe's privacy and retention terms before using pruning on sensitive conversations. Jev returns a constrained numeric answer, but that answer can still be wrong.
-
-## Health and Logs
-
-```bash
-curl --fail --silent http://127.0.0.1:5590/health
-tail -f ~/.claude/jev-prune.log
-```
-
-Example health response:
-
-```json
-{
-  "status": "ok",
-  "proxy_version": "1.0.0",
-  "jev_configured": true,
-  "pruning_enabled": true,
-  "requests": 3,
-  "pruning_decisions": 8,
-  "dropped_pairs": 2,
-  "fail_open_events": 0,
-  "uptime_seconds": 42
-}
-```
-
-`jev_configured` means a key is present. Health checks do not call TypeSafe, spend API credits, or claim that the external service is reachable.
+All settings are listed in [.env.example](./.env.example).
 
 ## Troubleshooting
 
-If startup reports that `TYPESAFE_API_KEY` is required, add the key to `.env` or run in pass-through mode:
+Run `jev-prune --doctor` first. It checks Node.js, Claude Code, your key, TypeSafe, the port, and settings that bypass the proxy.
+
+- **Logs:** `~/.claude/jev-prune.log`
+- **"Port 5590 is used by another program":** set a different `PORT` in `.env`.
+- **"`claude` was not found":** install Claude Code and check that `claude` runs in your terminal.
+- **Skip Jev Prune for a session:** run `claude` as usual.
+- **Using a custom `ANTHROPIC_BASE_URL`:** Jev Prune sends traffic on to it instead of the Anthropic API. If it is set in `~/.claude/settings.json`, Claude Code skips the proxy; move it to `ANTHROPIC_UPSTREAM_URL` in `.env`.
+- **Bedrock or Vertex:** not supported. Claude Code skips the proxy when `CLAUDE_CODE_USE_BEDROCK` or `CLAUDE_CODE_USE_VERTEX` is set.
+- **"Jev Prune was updated":** close all `jev-prune` sessions so the proxy restarts on the new version.
+
+## Uninstall
 
 ```bash
-JEV_PRUNE_ENABLED=false npm start
+npm unlink -g claude-code-jev-prune
+rm -rf ~/.claude/commands/jev-prune*.md ~/.claude/jev-prune*
 ```
 
-If Claude Code reports connection refused, verify the proxy and client-side URL:
+Then delete this folder.
 
-```bash
-curl --fail http://127.0.0.1:5590/health
-echo "$ANTHROPIC_BASE_URL"
-```
+## More
 
-If requests loop back to the proxy, check `ANTHROPIC_UPSTREAM_URL`. It should normally be unset or `https://api.anthropic.com`; it must not be the local proxy URL.
-
-If no pruning occurs, check the health response, thresholds, recent-pair count, and excluded-tool list. Short conversations and conversations containing only protected or unmatched tools have no eligible candidates.
-
-Claude Code's built-in compaction remains separate and may still run after proxy pruning. If TypeSafe is unavailable, the proxy records `prune_fail_open` and forwards the original request.
-
-## Development
-
-```bash
-npm run dev
-npm test
-npm run lint
-npm run build
-npm run check
-```
-
-Tests cover configuration, token estimation, the TypeSafe wire contract, pair-safe pruning, caching, fail-open behavior, upstream forwarding, error relay, server-sent events, file logging, startup, and graceful shutdown.
-
-## Limitations
-
-- Token counts are estimates.
-- Relevance pruning can discard context that later becomes useful.
-- Request JSON is parsed and reserialized, so byte-identical HTTP payloads are not promised.
-- Drop caching is process-local and resets when the proxy restarts.
-- Built-in Claude Code compaction remains independent and may still run.
-- Published savings, latency, and quality numbers require workload-specific benchmarks and are not asserted by this repository.
+How pruning decides what to remove: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Run `npm run check` to lint, build, and test.
 
 ## License
 

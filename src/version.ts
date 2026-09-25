@@ -21,7 +21,8 @@ function readPackageVersion(): string {
       continue;
     }
   }
-  throw new Error("Unable to read application version from package.json");
+  // An unknown version must not stop the proxy from starting.
+  return "unknown";
 }
 
 export const VERSION = readPackageVersion();

@@ -78,6 +78,8 @@ export interface PruneResult {
   manual?: boolean;
   superseded?: number;
   trimmed?: number;
+  /** Tokens newly removed by this prune, excluding earlier decisions. */
+  removedTokens?: number;
   resumed?: boolean;
   aboveTarget?: boolean;
   notice?: string;
@@ -88,4 +90,6 @@ export interface ProxyStats {
   pruningDecisions: number;
   droppedPairs: number;
   failOpenEvents: number;
+  prunes: number;
+  tokensRemoved: number;
 }

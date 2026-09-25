@@ -127,6 +127,27 @@ describe("ContextPruner", () => {
     expect(result.dropped).toBe(0);
   });
 
+  test("never prunes results that load deferred tool definitions", async () => {
+    const request = clone(twoToolRequest);
+    const oldResult = request.messages[2]?.content as Array<Record<string, unknown>>;
+    oldResult[0]!.content = [{ type: "tool_reference", tool_name: "mcp__x__y" }];
+    const observed = {
+      goals: [] as string[],
+      batches: [] as ToolCandidate[][],
+    };
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer: scorerReturning({ "call-old": 0, "call-new": 0.9 }, observed),
+    });
+
+    const result = await pruner.prune(request);
+
+    expect(allToolUseIds(result.request)).toEqual(["call-old", "call-new"]);
+    expect(
+      observed.batches[0]?.map((candidate) => candidate.toolUseId),
+    ).toEqual(["call-new"]);
+  });
+
   test("preserves unmatched, duplicate, malformed, text, and system content", async () => {
     const request: AnthropicRequest = {
       system: "never remove",
@@ -587,6 +608,28 @@ describe("ContextPruner", () => {
       expect(batchIds(observed)).toEqual([["call-old", "call-new"], ["call-3"]]);
     });
 
+    test("are re-scored when the latest user goal changes", async () => {
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const pruner = new ContextPruner({
+        config: config({ rescoreTokens: 1_000_000 }),
+        scorer: scorerReturning({ "call-old": 0.9, "call-new": 0.9 }, observed),
+      });
+      const changed = clone(twoToolRequest);
+      changed.messages[changed.messages.length - 1] = {
+        role: "user",
+        content: "Investigate the old login log again.",
+      };
+
+      await pruner.prune(twoToolRequest, { sessionId: "s" });
+      const result = await pruner.prune(changed, { sessionId: "s" });
+
+      expect(result.evaluated).toBe(2);
+      expect(observed.goals).toEqual([
+        "Keep going with the JWT fix.",
+        "Investigate the old login log again.",
+      ]);
+    });
+
     test("are re-scored after the context grows by the rescore amount", async () => {
       const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
       const grown = withExtraPair("call-3", "x".repeat(4_000));
@@ -778,7 +821,7 @@ describe("ContextPruner", () => {
       );
     });
 
-    test("stubs even the protected newest pairs and keeps cache_control", async () => {
+    test("keeps repeated Bash output and its cache_control", async () => {
       const pruner = new ContextPruner({
         config: rewriteConfig({ keepRecent: 5 }),
         scorer: scorerReturning({}),
@@ -796,10 +839,10 @@ describe("ContextPruner", () => {
       const result = await pruner.prune(request);
 
       expect(resultBlock(result.request, "bash-1")).toMatchObject({
-        content: "[jev-prune] Output removed: superseded by a later run of the same command.",
+        content: "a",
         cache_control: { type: "ephemeral" },
       });
-      expect(result.trimmed).toBe(0);
+      expect(result.trimmed ?? 0).toBe(0);
     });
 
     test("re-applies rewrites mid-task, after a Jev failure, and after a restart", async () => {

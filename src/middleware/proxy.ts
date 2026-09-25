@@ -3,13 +3,11 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as NodeReadableStream } from "node:stream/web";
 import type { Config } from "../config.js";
-import type {
-  AnthropicRequest,
-  PruneResult,
-  ProxyStats,
-} from "../types.js";
+import type { AnthropicRequest, PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
+import { CanaryPolicy } from "../services/canary.js";
+import { appendNotice } from "../services/messages.js";
 
 interface RequestPruner {
   prune(
@@ -100,7 +98,10 @@ function requestHeaders(request: Request): Headers {
   return headers;
 }
 
-function copyResponseHeaders(upstream: globalThis.Response, response: Response) {
+function copyResponseHeaders(
+  upstream: globalThis.Response,
+  response: Response,
+) {
   const blockedHeaders = hopByHopFilter(
     RESPONSE_HEADER_BLOCKLIST,
     upstream.headers.get("connection"),
@@ -116,6 +117,7 @@ async function forward(
   request: Request,
   response: Response,
   dependencies: ProxyDependencies,
+  canaryPolicy: CanaryPolicy,
 ): Promise<void> {
   dependencies.stats.requests += 1;
   let body = request.body as unknown;
@@ -128,11 +130,18 @@ async function forward(
   ) {
     const startedAt = Date.now();
     const sessionId = request.get(SESSION_HEADER);
+    const canary = canaryPolicy.check(body, sessionId);
+    if (canary.prune && sessionId) {
+      dependencies.pruner.requestManualPrune?.(sessionId);
+    }
     const result = await dependencies.pruner.prune(
       body,
       sessionId ? { sessionId } : {},
     );
-    body = result.request;
+    body =
+      canary.notice && dependencies.config.notify
+        ? appendNotice(result.request, canary.notice)
+        : result.request;
     dependencies.stats.pruningDecisions += result.evaluated;
     dependencies.stats.droppedPairs += result.dropped;
     if (result.reason === "fail-open") {
@@ -146,11 +155,14 @@ async function forward(
         tokens: result.afterTokens,
       });
     } else if (result.reason === "pruned") {
+      dependencies.stats.prunes += 1;
+      dependencies.stats.tokensRemoved += result.removedTokens ?? 0;
       dependencies.logger.info("prune_complete", {
         beforeTokens: result.beforeTokens,
         afterTokens: result.afterTokens,
         evaluated: result.evaluated,
         dropped: result.dropped,
+        removedTokens: result.removedTokens ?? 0,
         superseded: result.superseded ?? 0,
         trimmed: result.trimmed ?? 0,
         manual: result.manual ?? false,
@@ -167,7 +179,8 @@ async function forward(
 
   const headers = requestHeaders(request);
   const canHaveBody = request.method !== "GET" && request.method !== "HEAD";
-  const serializedBody = canHaveBody && body !== undefined ? JSON.stringify(body) : undefined;
+  const serializedBody =
+    canHaveBody && body !== undefined ? JSON.stringify(body) : undefined;
   if (serializedBody !== undefined) {
     headers.set("content-type", "application/json");
   }
@@ -225,16 +238,22 @@ async function forward(
 export function createProxyHandler(
   dependencies: ProxyDependencies,
 ): RequestHandler {
+  const canaryPolicy = new CanaryPolicy(
+    dependencies.config,
+    dependencies.logger,
+  );
   return (request: Request, response: Response, next: NextFunction) => {
-    void forward(request, response, dependencies).catch((error: unknown) => {
-      dependencies.logger.error("proxy_response_failed", {
-        error: error instanceof Error ? error.message : "unknown error",
-      });
-      if (response.headersSent) {
-        response.destroy(error instanceof Error ? error : undefined);
-        return;
-      }
-      next(error);
-    });
+    void forward(request, response, dependencies, canaryPolicy).catch(
+      (error: unknown) => {
+        dependencies.logger.error("proxy_response_failed", {
+          error: error instanceof Error ? error.message : "unknown error",
+        });
+        if (response.headersSent) {
+          response.destroy(error instanceof Error ? error : undefined);
+          return;
+        }
+        next(error);
+      },
+    );
   };
 }

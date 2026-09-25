@@ -6,6 +6,7 @@ import type {
   PruneStateStore,
   Rewrite,
 } from "./pruneState.js";
+import { appendNotice, lastTurnIndex, messageText } from "./messages.js";
 import { findSuperseded, trimOutput } from "./toolRewrites.js";
 import type {
   AnthropicRequest,
@@ -92,6 +93,22 @@ function cacheKey(candidate: ToolCandidate): string {
     .digest("base64url");
 }
 
+/**
+ * Tool search results hold `tool_reference` blocks that load deferred tool
+ * definitions. Removing one would unload tools Claude may still call.
+ */
+function loadsToolDefinitions(result: unknown): boolean {
+  return (
+    Array.isArray(result) &&
+    result.some(
+      (block) =>
+        typeof block === "object" &&
+        block !== null &&
+        (block as { type?: unknown }).type === "tool_reference",
+    )
+  );
+}
+
 export class ContextPruner {
   private readonly config: Config;
   private readonly scorer: RelevanceScorer;
@@ -101,6 +118,7 @@ export class ContextPruner {
   private readonly keepCache = new Map<string, true>();
   private readonly rewriteCache = new Map<string, Rewrite>();
   private readonly lastFullScoreTokens = new Map<string, number>();
+  private readonly lastScoredGoals = new Map<string, string>();
   private readonly now: () => number;
   private readonly manualPrunes = new Map<string, number>();
   private readonly seenSessions = new Map<string, true>();
@@ -191,7 +209,9 @@ export class ContextPruner {
       }
 
       const allowed = candidates.filter(
-        (candidate) => !this.config.excludeTools.has(candidate.toolName),
+        (candidate) =>
+          !this.config.excludeTools.has(candidate.toolName) &&
+          !loadsToolDefinitions(candidate.result),
       );
       const keys = new Map<ToolCandidate, string>();
       for (const candidate of allowed) {
@@ -314,10 +334,12 @@ export class ContextPruner {
       // since the last full scoring (or the user runs /jev-prune), so stable
       // candidates are not re-sent to Jev on every turn.
       const sessionKey = options.sessionId ?? DEFAULT_SESSION;
+      const goal = this.latestUserGoal(request);
       const lastFull = this.lastFullScoreTokens.get(sessionKey);
       const fullRescore =
         manual ||
         lastFull === undefined ||
+        this.lastScoredGoals.get(sessionKey) !== goal ||
         rewrittenTokens - lastFull >= this.config.rescoreTokens;
       const toScore = fullRescore
         ? eligibleForScoring
@@ -339,7 +361,6 @@ export class ContextPruner {
 
       const newlyDroppedCandidates: ToolCandidate[] = [];
       if (toScore.length > 0) {
-        const goal = this.latestUserGoal(request);
         const scores = await this.scorer.score(goal, toScore);
         const cutoff = rewrittenTokens >= this.config.triggerTokens ? 0.7 : 0.5;
         const scoredCandidates = toScore.map((candidate) => {
@@ -382,6 +403,7 @@ export class ContextPruner {
           : this.rewriteRequest(request, droppedIds, rewrites);
       const afterTokens = estimateTokens(prunedRequest);
       if (fullRescore && toScore.length > 0) {
+        remember(this.lastScoredGoals, sessionKey, goal, MAX_TRACKED_SESSIONS);
         remember(
           this.lastFullScoreTokens,
           sessionKey,
@@ -401,12 +423,13 @@ export class ContextPruner {
       });
       return {
         request: this.config.notify
-          ? this.appendNotice(prunedRequest, notice)
+          ? appendNotice(prunedRequest, notice)
           : prunedRequest,
         beforeTokens,
         afterTokens,
         evaluated: toScore.length,
         dropped: droppedIds.size,
+        removedTokens: Math.max(0, cachedTokens - afterTokens),
         superseded,
         trimmed,
         reason: "pruned",
@@ -444,18 +467,6 @@ export class ContextPruner {
       dropped,
       reason,
     };
-  }
-
-  /**
-   * Claude Code may append `system` messages (hook context) after the user's
-   * turn, so the turn boundary is judged from the last user/assistant message.
-   */
-  private lastTurnIndex(request: AnthropicRequest): number {
-    for (let index = request.messages.length - 1; index >= 0; index -= 1) {
-      const role = request.messages[index]?.role;
-      if (role === "user" || role === "assistant") return index;
-    }
-    return -1;
   }
 
   private restore(saved: PruneStateSnapshot): void {
@@ -504,8 +515,8 @@ export class ContextPruner {
 
   /**
    * A session seen for the first time that already has history is a resumed
-   * conversation. Its prompt cache has expired, so pruning now is free; below
-   * the automatic threshold, suggest /jev-prune instead of pruning unasked.
+   * conversation. Below the automatic threshold, suggest /jev-prune instead
+   * of pruning unasked. First sight does not prove its prompt cache expired.
    */
   private resumeNotice(
     result: PruneResult,
@@ -530,7 +541,7 @@ export class ContextPruner {
       resumed: true,
       notice,
       request: this.config.notify
-        ? this.appendNotice(result.request, notice)
+        ? appendNotice(result.request, notice)
         : result.request,
     };
   }
@@ -546,24 +557,16 @@ export class ContextPruner {
       manual,
       notice,
       request: this.config.notify
-        ? this.appendNotice(result.request, notice)
+        ? appendNotice(result.request, notice)
         : result.request,
     };
   }
 
   private invokesManualCommand(request: AnthropicRequest): boolean {
     if (!this.isNewUserTurn(request)) return false;
-    const last = request.messages[this.lastTurnIndex(request)];
+    const last = request.messages[lastTurnIndex(request)];
     if (!last) return false;
-    if (typeof last.content === "string") {
-      return MANUAL_COMMAND.test(last.content);
-    }
-    return last.content.some(
-      (block) =>
-        block.type === "text" &&
-        typeof block.text === "string" &&
-        MANUAL_COMMAND.test(block.text),
-    );
+    return MANUAL_COMMAND.test(messageText(last));
   }
 
   private takeManualPrune(
@@ -578,7 +581,7 @@ export class ContextPruner {
   }
 
   private isNewUserTurn(request: AnthropicRequest): boolean {
-    const last = request.messages[this.lastTurnIndex(request)];
+    const last = request.messages[lastTurnIndex(request)];
     if (!last || last.role !== "user") return false;
     if (typeof last.content === "string") return true;
     return !last.content.some((block) => isToolResult(block));
@@ -615,25 +618,6 @@ export class ContextPruner {
       "Tell the user in one short line and suggest writing a handoff file " +
       "for a fresh session."
     );
-  }
-
-  private appendNotice(
-    request: AnthropicRequest,
-    notice: string,
-  ): AnthropicRequest {
-    const index = this.lastTurnIndex(request);
-    const last = request.messages[index];
-    if (!last) return request;
-    const content =
-      typeof last.content === "string"
-        ? [{ type: "text", text: last.content }]
-        : last.content;
-    const messages = [...request.messages];
-    messages[index] = {
-      ...last,
-      content: [...content, { type: "text", text: notice }],
-    };
-    return { ...request, messages };
   }
 
   private touchCachedDrop(key: string): boolean {
@@ -708,17 +692,7 @@ export class ContextPruner {
     for (let index = request.messages.length - 1; index >= 0; index -= 1) {
       const message = request.messages[index];
       if (!message || message.role !== "user") continue;
-      if (typeof message.content === "string" && message.content.trim()) {
-        return message.content;
-      }
-      if (!Array.isArray(message.content)) continue;
-      const text = message.content
-        .filter(
-          (block) => block.type === "text" && typeof block.text === "string",
-        )
-        .map((block) => String(block.text))
-        .join("\n")
-        .trim();
+      const text = messageText(message).trim();
       if (text) return text;
     }
     return "Complete the current task.";
