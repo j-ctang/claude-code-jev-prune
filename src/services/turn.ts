@@ -6,6 +6,8 @@ export interface Turn {
   newUserTurn: boolean;
   /** The newest nonempty user text, which pruning scores against. */
   goal: string;
+  /** The user text before `goal`; set only on a new user turn. */
+  previousGoal?: string;
   /** Slash command the user just ran, without a plugin namespace. */
   command?: string;
   /** Claude's last finished reply, if it ended with text rather than a tool call. */
@@ -49,18 +51,20 @@ export function readTurn(request: AnthropicRequest): Turn {
   const current = request.messages[lastTurnIndex(request)];
   const newUserTurn =
     current?.role === "user" && !hasBlock(current, "tool_result");
-  const turn: Turn = { newUserTurn, goal: FALLBACK_GOAL };
-
-  for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+  const texts: string[] = [];
+  for (
+    let index = request.messages.length - 1;
+    index >= 0 && texts.length < 2;
+    index -= 1
+  ) {
     const message = request.messages[index];
     if (message?.role !== "user") continue;
     const text = messageText(message).trim();
-    if (text) {
-      turn.goal = text;
-      break;
-    }
+    if (text) texts.push(text);
   }
+  const turn: Turn = { newUserTurn, goal: texts[0] ?? FALLBACK_GOAL };
   if (!newUserTurn || !current) return turn;
+  if (texts[1]) turn.previousGoal = texts[1];
 
   const command = COMMAND.exec(messageText(current))?.[1];
   if (command) turn.command = command;

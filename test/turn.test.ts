@@ -24,8 +24,27 @@ describe("readTurn", () => {
     expect(turn).toEqual({
       newUserTurn: true,
       goal: "Now billing.",
+      previousGoal: "Fix auth.",
       lastReply: "Done.",
     });
+  });
+
+  test("previous goal is set only on a new user turn", () => {
+    expect(
+      readTurn({ messages: [{ role: "user", content: "Fix auth." }] })
+        .previousGoal,
+    ).toBeUndefined();
+    expect(
+      readTurn({
+        messages: [
+          { role: "user", content: "Fix auth." },
+          { role: "assistant", content: "Done." },
+          { role: "user", content: "Now billing." },
+          toolUse,
+          toolResult,
+        ],
+      }).previousGoal,
+    ).toBeUndefined();
   });
 
   test("a tool result is not a new user turn and has no reply", () => {
