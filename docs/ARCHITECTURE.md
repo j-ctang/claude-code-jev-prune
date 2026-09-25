@@ -35,7 +35,12 @@ Express application
 | --- | --- |
 | `src/config.ts` | Parse and validate every environment variable. |
 | `src/services/jevService.ts` | Build TypeSafe requests, batch questions, enforce timeout, and validate answers. |
-| `src/services/contextPruner.ts` | Find safe pairs, apply policy, cache drops, and immutably filter requests. |
+| `src/services/contextPruner.ts` | Run the pruning pipeline: re-apply saved decisions, gate, rewrite, score, render. |
+| `src/services/decisionMemory.ts` | Remember drop, keep, and rewrite decisions; persist them across restarts. |
+| `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and remove or rewrite them immutably. |
+| `src/services/toolRewrites.ts` | Stub superseded Reads and trim large outputs without calling Jev. |
+| `src/services/turn.ts` | Read the latest turn: new user turn, goal, slash command, last reply. |
+| `src/services/canary.ts` | Watch the response canary and handle `/jev-prune-auto` commands. |
 | `src/middleware/proxy.ts` | Forward headers/body, track statistics, and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
 | `src/utils/logger.ts` | Write redacted structured events to console and disk. |
@@ -69,6 +74,7 @@ The proxy applies protection before any content is sent to TypeSafe:
 - Tools named by `JEV_PRUNE_EXCLUDE_TOOLS` are protected.
 - Results that contain `tool_reference` blocks (tool search) are protected, because removing them would unload deferred tool definitions.
 - Previously cached drops are not scored again.
+- An older Read replaced by a later Read of the same file becomes a stub and is never scored. If the later Read is dropped, the stub is dropped too.
 - Previously kept candidates are scored again when the latest user goal changes, or after configured context growth.
 
 The current goal is the newest nonempty user text that is not a tool result. If none exists, the proxy uses the neutral fallback `Complete the current task.`
