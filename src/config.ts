@@ -82,7 +82,7 @@ function parseInteger(
 }
 
 function parseProbability(value: string, name: string): number {
-  const parsed = Number(value);
+  const parsed = value.trim() ? Number(value) : Number.NaN;
   if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
     throw new Error(`${name} must be a number between 0 and 1`);
   }

@@ -31,6 +31,12 @@ describe("loadConfig", () => {
     expect(load({ JEV_ROUTE_UP_THRESHOLD: "1.5" })).toThrow(
       "JEV_ROUTE_UP_THRESHOLD must be a number between 0 and 1",
     );
+    expect(load({ JEV_ROUTE_UP_THRESHOLD: "" })).toThrow(
+      "JEV_ROUTE_UP_THRESHOLD must be a number between 0 and 1",
+    );
+    expect(load({ JEV_ROUTE_DOWN_THRESHOLD: "  " })).toThrow(
+      "JEV_ROUTE_DOWN_THRESHOLD must be a number between 0 and 1",
+    );
     expect(load({ JEV_ROUTE_DOWN_THRESHOLD: "0.7" })).toThrow(
       "JEV_ROUTE_DOWN_THRESHOLD must be less than JEV_ROUTE_UP_THRESHOLD",
     );
