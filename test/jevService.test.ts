@@ -56,6 +56,59 @@ function createService(
 }
 
 describe("JevService", () => {
+  test("asks named noul questions about any state", async () => {
+    const captured: CapturedRequest[] = [];
+    const fetchFn: typeof fetch = async (input, init) => {
+      captured.push({ url: String(input), init });
+      return responseForBatch(String(init?.body));
+    };
+    const hard = {
+      instructions: "Is it hard?",
+      criteria: { true: "Hard.", false: "Easy." },
+    };
+    const continues = {
+      instructions: "Does it continue?",
+      criteria: { true: "Continues.", false: "New task." },
+    };
+
+    const answers = await createService(fetchFn).ask(
+      { newest_request: "Fix it" },
+      { hard, continues },
+    );
+
+    expect(answers).toEqual(
+      new Map([
+        ["hard", 0.91],
+        ["continues", 0.08],
+      ]),
+    );
+    expect(JSON.parse(String(captured[0]?.init?.body))).toEqual({
+      model: "jev-latest",
+      state: { newest_request: "Fix it" },
+      questions: {
+        hard: { type: "noul", ...hard },
+        continues: { type: "noul", ...continues },
+      },
+    });
+  });
+
+  test("ask rejects an invalid or missing answer", async () => {
+    const question = {
+      instructions: "Is it hard?",
+      criteria: { true: "Hard.", false: "Easy." },
+    };
+    const invalid: typeof fetch = async () =>
+      Response.json({ answers: { hard: { type: "noul", noul: 2 } } });
+    const missing: typeof fetch = async () => Response.json({ answers: {} });
+
+    await expect(
+      createService(invalid).ask({}, { hard: question }),
+    ).rejects.toThrow("TypeSafe returned an invalid answer for hard");
+    await expect(
+      createService(missing).ask({}, { hard: question }),
+    ).rejects.toThrow("TypeSafe returned an invalid answer for hard");
+  });
+
   test("sends named noul questions and returns scores by tool-use ID", async () => {
     const captured: CapturedRequest[] = [];
     const fetchFn: typeof fetch = async (input, init) => {

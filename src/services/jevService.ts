@@ -1,5 +1,10 @@
 import { PruneError } from "../errors.js";
-import type { RelevanceScorer, ToolCandidate } from "../types.js";
+import type {
+  NoulAsker,
+  NoulQuestion,
+  RelevanceScorer,
+  ToolCandidate,
+} from "../types.js";
 
 const MAX_QUESTIONS_PER_REQUEST = 32;
 
@@ -16,7 +21,7 @@ interface NoulAnswer {
   noul: number;
 }
 
-export class JevService implements RelevanceScorer {
+export class JevService implements RelevanceScorer, NoulAsker {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly model: string;
@@ -53,35 +58,22 @@ export class JevService implements RelevanceScorer {
     return scores;
   }
 
-  private async scoreBatch(
-    goal: string,
-    batch: readonly ToolCandidate[],
+  /** Sends named noul questions about `state` and returns each answer by name. */
+  async ask(
+    state: Record<string, unknown>,
+    questions: Readonly<Record<string, NoulQuestion>>,
   ): Promise<ReadonlyMap<string, number>> {
+    const keys = Object.keys(questions);
+    if (keys.length > MAX_QUESTIONS_PER_REQUEST) {
+      throw new PruneError(
+        `TypeSafe accepts at most ${MAX_QUESTIONS_PER_REQUEST} questions per request`,
+      );
+    }
     const body = {
       model: this.model,
-      state: {
-        current_goal: goal,
-        candidates: batch.map((candidate, index) => ({
-          key: `candidate_${index}`,
-          tool_use_id: candidate.toolUseId,
-          tool_name: candidate.toolName,
-          input: candidate.input,
-          result: candidate.result,
-        })),
-      },
+      state,
       questions: Object.fromEntries(
-        batch.map((_candidate, index) => [
-          `candidate_${index}`,
-          {
-            type: "noul",
-            instructions: `Is candidates[${index}] still needed to complete current_goal?`,
-            criteria: {
-              true: "The current task depends on this tool input or result.",
-              false:
-                "The tool call is stale, superseded, exploratory, or unrelated to the current task.",
-            },
-          },
-        ]),
+        keys.map((key) => [key, { type: "noul", ...questions[key] }]),
       ),
     };
 
@@ -102,13 +94,49 @@ export class JevService implements RelevanceScorer {
     const payload: unknown = await response.json();
     const answers = this.readAnswers(payload);
     const scores = new Map<string, number>();
-    for (const [index, candidate] of batch.entries()) {
-      const key = `candidate_${index}`;
+    for (const key of keys) {
       const answer = answers[key];
       if (!this.isNoulAnswer(answer)) {
         throw new PruneError(`TypeSafe returned an invalid answer for ${key}`);
       }
-      scores.set(candidate.toolUseId, answer.noul);
+      scores.set(key, answer.noul);
+    }
+    return scores;
+  }
+
+  private async scoreBatch(
+    goal: string,
+    batch: readonly ToolCandidate[],
+  ): Promise<ReadonlyMap<string, number>> {
+    const answers = await this.ask(
+      {
+        current_goal: goal,
+        candidates: batch.map((candidate, index) => ({
+          key: `candidate_${index}`,
+          tool_use_id: candidate.toolUseId,
+          tool_name: candidate.toolName,
+          input: candidate.input,
+          result: candidate.result,
+        })),
+      },
+      Object.fromEntries(
+        batch.map((_candidate, index) => [
+          `candidate_${index}`,
+          {
+            instructions: `Is candidates[${index}] still needed to complete current_goal?`,
+            criteria: {
+              true: "The current task depends on this tool input or result.",
+              false:
+                "The tool call is stale, superseded, exploratory, or unrelated to the current task.",
+            },
+          },
+        ]),
+      ),
+    );
+    const scores = new Map<string, number>();
+    for (const [index, candidate] of batch.entries()) {
+      const score = answers.get(`candidate_${index}`);
+      if (score !== undefined) scores.set(candidate.toolUseId, score);
     }
     return scores;
   }
