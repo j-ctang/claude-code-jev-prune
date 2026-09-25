@@ -513,20 +513,18 @@ describe("ContextPruner", () => {
     expect(observed.batches).toHaveLength(1);
   });
 
-  test("appends a notice about the cut to the new user turn", async () => {
+  test("reports the cut as a notice without adding it to the request", async () => {
     const pruner = new ContextPruner({
       config: config({ notify: true, targetTokens: 1_000_000_000 }),
       scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
     });
 
     const result = await pruner.prune(twoToolRequest);
-    const last = result.request.messages.at(-1);
 
     expect(result.aboveTarget).toBe(false);
-    expect(last?.content).toEqual([
-      { type: "text", text: "Keep going with the JWT fix." },
-      { type: "text", text: result.notice },
-    ]);
+    expect(result.request.messages.at(-1)).toEqual(
+      twoToolRequest.messages.at(-1),
+    );
     expect(result.notice).toMatch(/Pruned 1 stale tool result/);
     expect(result.notice).not.toMatch(/handoff/);
   });
@@ -566,10 +564,6 @@ describe("ContextPruner", () => {
       role: "system",
       content: "hook context",
     });
-    expect(result.request.messages.at(-2)?.content).toEqual([
-      { type: "text", text: "Keep going with the JWT fix." },
-      { type: "text", text: result.notice },
-    ]);
     expect(observed.batches).toHaveLength(1);
   });
 
@@ -999,9 +993,6 @@ describe("ContextPruner", () => {
 
       expect(first.resumed).toBe(true);
       expect(first.notice).toMatch(/continued conversation .* run \/jev-prune/);
-      expect(JSON.stringify(first.request.messages.at(-1))).toContain(
-        "continued conversation",
-      );
       expect(second.resumed).toBeUndefined();
       expect(second.request).toBe(twoToolRequest);
     });
@@ -1175,9 +1166,6 @@ describe("ContextPruner", () => {
 
       expect(result.reason).toBe("no-candidates");
       expect(result.notice).toMatch(/no eligible tool results/);
-      expect(JSON.stringify(result.request.messages.at(-1))).toContain(
-        "no eligible tool results",
-      );
     });
   });
 

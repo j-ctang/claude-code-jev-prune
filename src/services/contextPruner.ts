@@ -22,7 +22,7 @@ import {
   loadsToolDefinitions,
 } from "./toolPairs.js";
 import { findSuperseded, trimOutput, type Superseded } from "./toolRewrites.js";
-import { appendNotice, readTurn, type Turn } from "./turn.js";
+import { readTurn, type Turn } from "./turn.js";
 
 interface ContextPrunerOptions {
   config: Config;
@@ -259,7 +259,7 @@ export class ContextPruner {
         aboveTarget,
       });
       return {
-        request: this.withNotice(prunedRequest, notice),
+        request: prunedRequest,
         beforeTokens,
         afterTokens,
         evaluated: toScore.length,
@@ -346,13 +346,6 @@ export class ContextPruner {
     return drops;
   }
 
-  private withNotice(
-    request: AnthropicRequest,
-    notice: string,
-  ): AnthropicRequest {
-    return this.config.notify ? appendNotice(request, notice) : request;
-  }
-
   /**
    * A session seen for the first time that already has history is a resumed
    * conversation. Below the automatic threshold, suggest /jev-prune instead
@@ -378,8 +371,7 @@ export class ContextPruner {
       ...result,
       resumed: true,
       notice,
-      request: this.withNotice(result.request, notice),
-    };
+          };
   }
 
   private withNothingToPrune(
@@ -392,7 +384,6 @@ export class ContextPruner {
       ...result,
       manual,
       notice,
-      request: this.withNotice(result.request, notice),
-    };
+          };
   }
 }

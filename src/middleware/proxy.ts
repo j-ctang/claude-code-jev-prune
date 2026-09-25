@@ -136,10 +136,13 @@ async function forward(
       ...(sessionId ? { sessionId } : {}),
       ...(canary.prune ? { trigger: "canary" as const } : {}),
     });
-    body =
-      canary.notice && dependencies.config.notify
-        ? appendNotice(result.request, canary.notice)
-        : result.request;
+    // Every notice for Claude is added here, and only when notices are on.
+    const notices = [result.notice, canary.notice].filter(
+      (notice): notice is string => notice !== undefined,
+    );
+    body = dependencies.config.notify
+      ? notices.reduce(appendNotice, result.request)
+      : result.request;
     recordPruneOutcome(result, {
       stats: dependencies.stats,
       logger: dependencies.logger,
