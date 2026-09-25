@@ -27,7 +27,13 @@ describe("findSuperseded", () => {
     ]);
 
     expect([...stubs]).toEqual([
-      ["a", "[jev-prune] Output removed: superseded by a later Read of src/auth.ts."],
+      [
+        "a",
+        {
+          stub: "[jev-prune] Output removed: superseded by a later Read of src/auth.ts.",
+          by: "b",
+        },
+      ],
     ]);
   });
 
