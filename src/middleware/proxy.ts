@@ -154,9 +154,17 @@ async function forward(
       ...(sessionId ? { sessionId } : {}),
       ...(canary.prune ? { trigger: "canary" as const } : {}),
     });
-    const route: RouteDecision = dependencies.router
-      ? await dependencies.router.route(body, sessionId)
-      : {};
+    // Routing never fails a request: on error, forward with no route.
+    let route: RouteDecision = {};
+    if (dependencies.router) {
+      try {
+        route = await dependencies.router.route(body, sessionId);
+      } catch (error) {
+        dependencies.logger.warn("route_fail_open", {
+          error: error instanceof Error ? error.message : "unknown error",
+        });
+      }
+    }
     // Every notice for Claude is added here, and only when notices are on.
     const withNotices = (notices: Array<string | undefined>) =>
       dependencies.config.notify

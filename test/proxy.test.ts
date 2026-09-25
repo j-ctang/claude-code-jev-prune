@@ -1,7 +1,13 @@
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type RequestListener,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -33,6 +39,21 @@ interface FakeUpstream {
 }
 
 const openUpstreams: FakeUpstream[] = [];
+
+const openServers: Server[] = [];
+
+/**
+ * Serves the app on 127.0.0.1 for supertest. supertest's default listens on
+ * the dual-stack wildcard and then dials 127.0.0.1, which on macOS reaches any
+ * other process bound to 127.0.0.1 on the same port instead of this app.
+ */
+async function serve(app: RequestListener): Promise<string> {
+  const server = createServer(app);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  openServers.push(server);
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
 
 async function startUpstream(
   respond: (
@@ -174,6 +195,13 @@ const routedRequest: AnthropicRequest = {
 
 afterEach(async () => {
   await Promise.all(openUpstreams.splice(0).map((upstream) => upstream.close()));
+  await Promise.all(
+    openServers.splice(0).map((server) => {
+      server.close();
+      server.closeAllConnections();
+      return once(server, "close");
+    }),
+  );
 });
 
 describe("Anthropic proxy", () => {
@@ -193,10 +221,10 @@ describe("Anthropic proxy", () => {
       },
     };
 
-    await request(appFor(upstream.url, scorer, { notify: true }))
+    await request(await serve(appFor(upstream.url, scorer, { notify: true })))
       .post("/v1/messages")
       .send(twoToolRequest);
-    await request(appFor(upstream.url, scorer, { notify: false }))
+    await request(await serve(appFor(upstream.url, scorer, { notify: false })))
       .post("/v1/messages")
       .send(twoToolRequest);
 
@@ -240,11 +268,11 @@ describe("Anthropic proxy", () => {
         { role: "user", content: "Continue again" },
       ],
     };
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(first);
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(second);
@@ -280,11 +308,11 @@ describe("Anthropic proxy", () => {
       content: "Second reply",
     });
 
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(first);
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(second);
@@ -322,7 +350,7 @@ describe("Anthropic proxy", () => {
         statePath,
       },
     );
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send({
@@ -340,11 +368,11 @@ describe("Anthropic proxy", () => {
       role: "assistant",
       content: "Second reply",
     });
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(first);
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(second);
@@ -365,14 +393,14 @@ describe("Anthropic proxy", () => {
         return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.1]));
       },
     }, { canaryPrefix: "Yo:", canaryAction: "prune", pruneThreshold: 1_000_000, statePath });
-    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s")
+    await request(await serve(app)).post("/v1/messages").set("x-claude-code-session-id", "s")
       .send({ messages: [{ role: "user", content: "<command-name>/jev-prune-auto-off</command-name>" }] });
     const first = structuredClone(twoToolRequest);
     first.messages.splice(-1, 0, { role: "assistant", content: "First reply" });
     const second = structuredClone(first);
     second.messages.splice(-1, 0, { role: "assistant", content: "Second reply" });
-    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s").send(first);
-    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s").send(second);
+    await request(await serve(app)).post("/v1/messages").set("x-claude-code-session-id", "s").send(first);
+    await request(await serve(app)).post("/v1/messages").set("x-claude-code-session-id", "s").send(second);
 
     expect(allToolUseIds(upstream.requests[2]?.body as AnthropicRequest)).toEqual(["call-old", "call-new"]);
   });
@@ -389,7 +417,7 @@ describe("Anthropic proxy", () => {
     };
     const app = appFor(upstream.url, scorer);
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages")
       .set("x-api-key", "anthropic-secret")
       .set("anthropic-version", "2023-06-01")
@@ -433,7 +461,7 @@ describe("Anthropic proxy", () => {
     };
     const app = appFor(upstream.url, scorer, {}, logger);
 
-    await request(app).post("/v1/messages").send(twoToolRequest).expect(200);
+    await request(await serve(app)).post("/v1/messages").send(twoToolRequest).expect(200);
 
     expect(upstream.requests[0]?.body).toEqual(twoToolRequest);
     expect(warnings).toEqual([
@@ -460,7 +488,7 @@ describe("Anthropic proxy", () => {
     const body = { model: "claude-sonnet-4-5", messages: [] };
     const app = appFor(upstream.url, scorer);
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages/count_tokens?beta=true")
       .send(body);
 
@@ -504,8 +532,8 @@ describe("Anthropic proxy", () => {
       logger,
     );
 
-    const json = await request(app).post("/v1/messages").send(twoToolRequest);
-    const streamed = await request(app)
+    const json = await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
+    const streamed = await request(await serve(app))
       .post("/v1/messages")
       .send({ ...twoToolRequest, stream: true });
 
@@ -537,7 +565,7 @@ describe("Anthropic proxy", () => {
       { pruningEnabled: false },
     );
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages/count_tokens")
       .set("connection", "x-client-private")
       .set("keep-alive", "timeout=5")
@@ -564,7 +592,7 @@ describe("Anthropic proxy", () => {
       { pruningEnabled: false },
     );
 
-    const response = await request(app).post("/v1/messages").send(twoToolRequest);
+    const response = await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
 
     expect(response.status).toBe(429);
     expect(response.headers["retry-after"]).toBe("3");
@@ -613,7 +641,7 @@ describe("Anthropic proxy", () => {
       { pruningEnabled: false },
     );
 
-    const response = await request(app).post("/v1/messages").send(twoToolRequest);
+    const response = await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
 
     expect(response.status).toBe(502);
     expect(response.body).toEqual({ error: "Anthropic upstream unavailable" });
@@ -635,8 +663,8 @@ describe("Anthropic proxy", () => {
       },
     });
 
-    await request(app).post("/v1/messages").send(twoToolRequest);
-    const health = await request(app).get("/health");
+    await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
+    const health = await request(await serve(app)).get("/health");
 
     expect(health.body.prunes).toBe(1);
     expect(health.body.tokens_removed).toBeGreaterThan(0);
@@ -669,7 +697,7 @@ describe("Anthropic proxy", () => {
       version: "9.8.7-test",
     });
 
-    const response = await request(app).get("/health");
+    const response = await request(await serve(app)).get("/health");
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
@@ -697,7 +725,7 @@ describe("Anthropic proxy", () => {
     });
     const app = appFor(upstream.url, { async score() { return new Map(); } });
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages")
       .set("content-type", "application/json")
       .send('{"messages":');
@@ -711,7 +739,9 @@ describe("Anthropic proxy", () => {
       response.end("{}");
     });
 
-    await request(appWithRouter(upstream.url, hardRouter()))
+    await request(
+      await serve(appWithRouter(upstream.url, hardRouter())),
+    )
       .post("/v1/messages")
       .send(routedRequest);
 
@@ -733,7 +763,7 @@ describe("Anthropic proxy", () => {
     const unavailable: string[] = [];
 
     const response = await request(
-      appWithRouter(upstream.url, hardRouter(unavailable)),
+      await serve(appWithRouter(upstream.url, hardRouter(unavailable))),
     )
       .post("/v1/messages")
       .send(routedRequest);
@@ -758,13 +788,39 @@ describe("Anthropic proxy", () => {
       response.end(JSON.stringify({ error: "prompt is too long" }));
     });
 
-    const response = await request(appWithRouter(upstream.url, hardRouter()))
+    const response = await request(
+      await serve(appWithRouter(upstream.url, hardRouter())),
+    )
       .post("/v1/messages")
       .send(routedRequest);
 
     expect(response.status).toBe(400);
     expect(response.body).toEqual({ error: "prompt is too long" });
     expect(upstream.requests).toHaveLength(2);
+  });
+
+  test("forwards unrouted when the router fails", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const router: RequestRouter = {
+      async route() {
+        throw new Error("router broke");
+      },
+      markUnavailable: () => "",
+    };
+
+    const response = await request(
+      await serve(appWithRouter(upstream.url, router)),
+    )
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(response.status).toBe(201);
+    expect(upstream.requests).toHaveLength(1);
+    const sent = upstream.requests[0]?.body as AnthropicRequest;
+    expect(sent.model).toBe("claude-opus-5-5");
   });
 
   test("does not retry a rejected request that was not routed", async () => {
@@ -779,7 +835,9 @@ describe("Anthropic proxy", () => {
       markUnavailable: () => "",
     };
 
-    await request(appWithRouter(upstream.url, router))
+    await request(
+      await serve(appWithRouter(upstream.url, router)),
+    )
       .post("/v1/messages")
       .send(routedRequest);
 
