@@ -14,6 +14,7 @@ import {
   nothingToPruneNotice,
   prunedNotice,
   resumedNotice,
+  type PruneTrigger,
 } from "./pruneNotices.js";
 import {
   applyDecisions,
@@ -28,17 +29,16 @@ interface ContextPrunerOptions {
   scorer: RelevanceScorer;
   logger?: AppLogger;
   maxCachedDrops?: number;
-  now?: () => number;
   stateStore?: PruneStateStore;
 }
 
 export interface PruneOptions {
   sessionId?: string;
+  /** Prune on this new user turn even below the automatic threshold. */
+  trigger?: PruneTrigger;
 }
 
 const DEFAULT_SESSION = "default";
-const MANUAL_PRUNE_TTL_MS = 10 * 60 * 1000;
-const MAX_PENDING_MANUAL_PRUNES = 1_000;
 
 type SkipReason = "disabled" | "below-threshold" | "mid-task" | "no-candidates";
 
@@ -62,35 +62,17 @@ export class ContextPruner {
   private readonly scorer: RelevanceScorer;
   private readonly logger: AppLogger | undefined;
   private readonly memory: DecisionMemory;
-  private readonly now: () => number;
-  private readonly manualPrunes = new Map<string, number>();
 
   constructor(options: ContextPrunerOptions) {
     this.config = options.config;
     this.scorer = options.scorer;
     this.logger = options.logger;
-    this.now = options.now ?? Date.now;
     this.memory = new DecisionMemory({
       maxEntries: options.maxCachedDrops ?? 10_000,
       rescoreTokens: options.config.rescoreTokens,
       store: options.stateStore,
       logger: options.logger,
     });
-  }
-
-  /**
-   * Queues a prune for the session's next new user turn, even below the
-   * automatic threshold. Pending requests expire after ten minutes.
-   */
-  requestManualPrune(sessionId: string): void {
-    this.manualPrunes.delete(sessionId);
-    this.manualPrunes.set(sessionId, this.now() + MANUAL_PRUNE_TTL_MS);
-    while (this.manualPrunes.size > MAX_PENDING_MANUAL_PRUNES) {
-      const oldest = this.manualPrunes.keys().next().value as
-        string | undefined;
-      if (oldest === undefined) break;
-      this.manualPrunes.delete(oldest);
-    }
   }
 
   async prune(
@@ -104,8 +86,12 @@ export class ContextPruner {
     const { sessionId } = options;
     const turn = readTurn(request);
     const firstSeen = this.memory.markSessionSeen(sessionId);
-    const manual =
-      this.takeManualPrune(turn, sessionId) || turn.command === "jev-prune";
+    const trigger = !turn.newUserTurn
+      ? undefined
+      : turn.command === "jev-prune"
+        ? "manual"
+        : options.trigger;
+    const manual = trigger !== undefined;
     const belowThreshold = (result: PruneResult) =>
       this.withResumeNotice(result, request, turn, firstSeen);
     const threshold = this.config.pruneThreshold;
@@ -275,7 +261,7 @@ export class ContextPruner {
       }
       this.memory.save();
       const aboveTarget = afterTokens > this.config.targetTokens;
-      const notice = prunedNotice(this.config, manual, {
+      const notice = prunedNotice(this.config, trigger, {
         dropped: newlyDropped.length,
         superseded: newStubs.size,
         trimmed,
@@ -419,13 +405,5 @@ export class ContextPruner {
       notice,
       request: this.withNotice(result.request, notice),
     };
-  }
-
-  private takeManualPrune(turn: Turn, sessionId: string | undefined): boolean {
-    if (sessionId === undefined || !turn.newUserTurn) return false;
-    const expiresAt = this.manualPrunes.get(sessionId);
-    if (expiresAt === undefined) return false;
-    this.manualPrunes.delete(sessionId);
-    return expiresAt > this.now();
   }
 }

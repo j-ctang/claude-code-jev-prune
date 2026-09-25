@@ -655,8 +655,10 @@ describe("ContextPruner", () => {
       });
 
       await pruner.prune(twoToolRequest, { sessionId: "s" });
-      pruner.requestManualPrune("s");
-      const manual = await pruner.prune(twoToolRequest, { sessionId: "s" });
+      const manual = await pruner.prune(twoToolRequest, {
+        sessionId: "s",
+        trigger: "manual",
+      });
 
       expect(manual.evaluated).toBe(2);
       expect(observed.batches).toHaveLength(2);
@@ -1011,7 +1013,7 @@ describe("ContextPruner", () => {
       triggerTokens: 1_000_000,
     };
 
-    test("prunes below the threshold once for the requesting session", async () => {
+    test("prunes below the threshold only when asked", async () => {
       const observed = {
         goals: [] as string[],
         batches: [] as ToolCandidate[][],
@@ -1020,13 +1022,12 @@ describe("ContextPruner", () => {
         config: config({ ...highThreshold, notify: true }),
         scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
       });
-      pruner.requestManualPrune("session-a");
-
       const other = await pruner.prune(twoToolRequest, {
         sessionId: "session-b",
       });
       const manual = await pruner.prune(twoToolRequest, {
         sessionId: "session-a",
+        trigger: "manual",
       });
       const again = await pruner.prune(clone(twoToolRequest), {
         sessionId: "session-a",
@@ -1079,8 +1080,10 @@ describe("ContextPruner", () => {
         config: config(highThreshold),
         scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }, observed),
       });
-      pruner.requestManualPrune("session-a");
-      await pruner.prune(twoToolRequest, { sessionId: "session-a" });
+      await pruner.prune(twoToolRequest, {
+        sessionId: "session-a",
+        trigger: "manual",
+      });
       const midTask = clone(twoToolRequest);
       midTask.messages.pop();
 
@@ -1095,39 +1098,32 @@ describe("ContextPruner", () => {
       expect(observed.batches).toHaveLength(1);
     });
 
-    test("waits for a new user turn before running", async () => {
+    test("never runs mid-task", async () => {
       const pruner = new ContextPruner({
         config: config(highThreshold),
         scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
       });
       const midTask = clone(twoToolRequest);
       midTask.messages.pop();
-      pruner.requestManualPrune("session-a");
 
-      const during = await pruner.prune(midTask, { sessionId: "session-a" });
-      const after = await pruner.prune(twoToolRequest, {
+      const during = await pruner.prune(midTask, {
         sessionId: "session-a",
+        trigger: "manual",
       });
 
       expect(during.reason).toBe("below-threshold");
-      expect(after.reason).toBe("pruned");
     });
 
-    test("ignores a request older than ten minutes", async () => {
-      let now = 0;
+    test("names a canary-triggered prune in its notice", async () => {
       const pruner = new ContextPruner({
-        config: config(highThreshold),
+        config: config({ ...highThreshold, notify: true }),
         scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
-        now: () => now,
-      });
-      pruner.requestManualPrune("session-a");
-      now = 10 * 60 * 1000 + 1;
-
-      const result = await pruner.prune(twoToolRequest, {
-        sessionId: "session-a",
       });
 
-      expect(result.reason).toBe("below-threshold");
+      const result = await pruner.prune(twoToolRequest, { trigger: "canary" });
+
+      expect(result.reason).toBe("pruned");
+      expect(result.notice).toMatch(/after missed response prefixes: pruned 1/);
     });
 
     test("tells the user when nothing is eligible", async () => {
@@ -1135,10 +1131,9 @@ describe("ContextPruner", () => {
         config: config({ ...highThreshold, keepRecent: 5, notify: true }),
         scorer: scorerReturning({}),
       });
-      pruner.requestManualPrune("session-a");
-
       const result = await pruner.prune(twoToolRequest, {
         sessionId: "session-a",
+        trigger: "manual",
       });
 
       expect(result.reason).toBe("no-candidates");

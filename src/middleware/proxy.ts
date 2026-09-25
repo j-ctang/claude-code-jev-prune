@@ -7,14 +7,14 @@ import type { AnthropicRequest, PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
 import { CanaryPolicy } from "../services/canary.js";
+import type { PruneOptions } from "../services/contextPruner.js";
 import { appendNotice } from "../services/turn.js";
 
 interface RequestPruner {
   prune(
     request: AnthropicRequest,
-    options?: { sessionId?: string },
+    options?: PruneOptions,
   ): Promise<PruneResult>;
-  requestManualPrune?(sessionId: string): void;
 }
 
 export const SESSION_HEADER = "x-claude-code-session-id";
@@ -131,13 +131,10 @@ async function forward(
     const startedAt = Date.now();
     const sessionId = request.get(SESSION_HEADER);
     const canary = canaryPolicy.check(body, sessionId);
-    if (canary.prune && sessionId) {
-      dependencies.pruner.requestManualPrune?.(sessionId);
-    }
-    const result = await dependencies.pruner.prune(
-      body,
-      sessionId ? { sessionId } : {},
-    );
+    const result = await dependencies.pruner.prune(body, {
+      ...(sessionId ? { sessionId } : {}),
+      ...(canary.prune ? { trigger: "canary" as const } : {}),
+    });
     body =
       canary.notice && dependencies.config.notify
         ? appendNotice(result.request, canary.notice)
