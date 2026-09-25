@@ -130,7 +130,9 @@ export class ModelRouter {
         `[jev-prune] Automatic model routing is on. This conversation now uses ${this.config.routeHardModel}. Tell the user in one short line, then continue their previous request.`,
       );
     }
-    if (turn.newUserTurn && !turn.command) {
+    // With notices off, ask mode can never ask, so Jev is not needed.
+    const silentAsk = this.mode.choice === "ask" && !this.config.notify;
+    if (turn.newUserTurn && !turn.command && !silentAsk) {
       return this.decision(
         conversation,
         state,

@@ -432,11 +432,12 @@ describe("ModelRouter in ask mode", () => {
     expect(next.notice).toContain("/jev-route-auto");
   });
 
-  test("does not ask when notices are off", async () => {
+  test("does not ask or call Jev when notices are off", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
+    const asker = scriptedAsker({ hard: 0.9, continues: 0 });
     const subject = new ModelRouter(
       { ...config, notify: false },
-      scriptedAsker({ hard: 0.9, continues: 0 }),
+      asker,
       new RouteMode(path),
       silentLogger,
     );
@@ -445,5 +446,6 @@ describe("ModelRouter in ask mode", () => {
 
     expect(result.model).toBeUndefined();
     expect(result.notice).toBeUndefined();
+    expect(asker.calls).toBe(0);
   });
 });
