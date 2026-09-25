@@ -192,6 +192,39 @@ describe("ModelRouter in auto mode", () => {
     expect(main.model).toBe(HARD);
   });
 
+  test("cache_control on the first message does not change the key", async () => {
+    const { router: subject } = await router(
+      scriptedAsker({ hard: 0.9, continues: 0 }),
+      "auto",
+    );
+    const cached = {
+      model: DEFAULT,
+      messages: [
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: "Redesign auth",
+              cache_control: { type: "ephemeral" },
+            },
+          ],
+        },
+      ],
+    } as AnthropicRequest;
+    const loop = toolLoop(["Redesign auth"]);
+    loop.messages[0] = {
+      role: "user",
+      content: [{ type: "text", text: "Redesign auth" }],
+    };
+
+    const first = await subject.route(cached, "s");
+    const next = await subject.route(loop, "s");
+
+    expect(first.model).toBe(HARD);
+    expect(next).toEqual({ conversation: first.conversation, model: HARD });
+  });
+
   test("a new first message starts a new conversation", () => {
     expect(conversationKey(turn(["A", "B"]), "s")).toBe(
       conversationKey(turn(["A", "C"]), "s"),

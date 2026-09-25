@@ -3,7 +3,7 @@ import type { Config } from "../config.js";
 import type { AnthropicRequest, NoulAsker, NoulQuestion } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import type { RouteMode } from "./routeMode.js";
-import { readTurn, type Turn } from "./turn.js";
+import { messageText, readTurn, type Turn } from "./turn.js";
 
 export interface RouteDecision {
   /** Model to send upstream; set only when it differs from the request's. */
@@ -61,14 +61,18 @@ const OFF_NOTICE =
 const SAVE_FAILED_NOTICE =
   "[jev-prune] Could not save the model routing setting.";
 
-/** A subagent shares its parent's session header but not its first message. */
+/**
+ * A subagent shares its parent's session header but not its first message.
+ * Only the first message's text is hashed: Claude Code moves `cache_control`
+ * to the newest message, so other block fields change between requests.
+ */
 export function conversationKey(
   request: AnthropicRequest,
   sessionId?: string,
 ): string {
   const first = request.messages.find((message) => message.role === "user");
   const digest = createHash("sha256")
-    .update(JSON.stringify(first?.content ?? ""))
+    .update(first ? messageText(first) : "")
     .digest("hex")
     .slice(0, 16);
   return `${sessionId ?? "no-session"}:${digest}`;

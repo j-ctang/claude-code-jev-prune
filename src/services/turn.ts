@@ -20,7 +20,7 @@ const COMMAND = /<command-name>\/(?:[\w-]+:)?([\w-]+)<\/command-name>/;
 
 const FALLBACK_GOAL = "Complete the current task.";
 
-function messageText(message: Message): string {
+export function messageText(message: Message): string {
   if (typeof message.content === "string") return message.content;
   return message.content
     .filter((block) => block.type === "text" && typeof block.text === "string")
