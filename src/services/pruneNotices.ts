@@ -7,6 +7,14 @@ type NoticeConfig = Pick<
 
 const thousands = (tokens: number) => `~${Math.round(tokens / 1000)}K`;
 
+/** Why a prune ran below the automatic threshold. */
+export type PruneTrigger = "manual" | "canary";
+
+const TRIGGER_LABELS: Record<PruneTrigger, string> = {
+  manual: "Manual prune: pruned",
+  canary: "Response prefix missed twice, so pruned",
+};
+
 export interface PruneCounts {
   dropped: number;
   superseded: number;
@@ -18,7 +26,7 @@ export interface PruneCounts {
 
 export function prunedNotice(
   config: NoticeConfig,
-  manual: boolean,
+  trigger: PruneTrigger | undefined,
   counts: PruneCounts,
 ): string {
   const extras = [
@@ -28,7 +36,7 @@ export function prunedNotice(
     counts.trimmed > 0 ? `trimmed ${counts.trimmed} large output(s)` : "",
   ].filter(Boolean);
   const summary =
-    `[jev-prune] ${manual ? "Manual prune: pruned" : "Pruned"} ${counts.dropped} stale tool result(s)` +
+    `[jev-prune] ${trigger ? TRIGGER_LABELS[trigger] : "Pruned"} ${counts.dropped} stale tool result(s)` +
     `${extras.length > 0 ? `, ${extras.join(", ")}` : ""}: context ` +
     `${thousands(counts.beforeTokens)} -> ${thousands(counts.afterTokens)} tokens.`;
   if (!counts.aboveTarget) {

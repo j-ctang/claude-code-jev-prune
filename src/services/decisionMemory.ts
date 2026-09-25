@@ -75,6 +75,9 @@ export class DecisionMemory {
     for (const [session, tokens] of saved.lastFullScoreTokens) {
       remember(this.lastFullScoreTokens, session, tokens, MAX_TRACKED_SESSIONS);
     }
+    for (const [session, goal] of saved.lastScoredGoals) {
+      remember(this.lastScoredGoals, session, goal, MAX_TRACKED_SESSIONS);
+    }
     for (const session of saved.seenSessions) {
       remember(this.seenSessions, session, true, MAX_TRACKED_SESSIONS);
     }
@@ -169,6 +172,7 @@ export class DecisionMemory {
         keeps: [...this.keeps.keys()],
         rewrites: [...this.rewrites.entries()],
         lastFullScoreTokens: [...this.lastFullScoreTokens.entries()],
+        lastScoredGoals: [...this.lastScoredGoals.entries()],
         seenSessions: [...this.seenSessions.keys()],
       });
     } catch (error) {

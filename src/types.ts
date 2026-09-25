@@ -66,6 +66,7 @@ export interface PruneResult {
   beforeTokens: number;
   afterTokens: number;
   evaluated: number;
+  /** Tool pairs newly dropped by this request, excluding earlier decisions. */
   dropped: number;
   reason:
     | "disabled"

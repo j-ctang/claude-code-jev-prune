@@ -1,11 +1,4 @@
-import {
-  chmodSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  writeFileSync,
-} from "node:fs";
-import { dirname } from "node:path";
+import { readJson, writeJsonAtomic } from "../utils/jsonFile.js";
 
 /** A stub replaces the whole output; a trim is recomputed from the original. */
 export type Rewrite =
@@ -21,6 +14,7 @@ export interface PruneStateSnapshot {
   keeps: string[];
   rewrites: Array<[string, Rewrite]>;
   lastFullScoreTokens: Array<[string, number]>;
+  lastScoredGoals: Array<[string, string]>;
   seenSessions: string[];
 }
 
@@ -48,6 +42,16 @@ function tokenEntries(value: unknown): Array<[string, number]> {
   );
 }
 
+function goalEntries(value: unknown): Array<[string, string]> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is [string, string] =>
+      Array.isArray(entry) &&
+      typeof entry[0] === "string" &&
+      typeof entry[1] === "string",
+  );
+}
+
 function rewriteEntries(value: unknown): Array<[string, Rewrite]> {
   if (!Array.isArray(value)) return [];
   return value.filter((entry): entry is [string, Rewrite] => {
@@ -66,36 +70,21 @@ function rewriteEntries(value: unknown): Array<[string, Rewrite]> {
 export function createFileStateStore(path: string): PruneStateStore {
   return {
     load() {
-      let raw: string;
-      try {
-        raw = readFileSync(path, "utf8");
-      } catch {
-        return undefined;
-      }
-      try {
-        const parsed = JSON.parse(raw) as Record<string, unknown>;
-        if (parsed.version !== STATE_VERSION) return undefined;
-        return {
-          drops: stringArray(parsed.drops),
-          keeps: stringArray(parsed.keeps),
-          rewrites: rewriteEntries(parsed.rewrites),
-          lastFullScoreTokens: tokenEntries(parsed.lastFullScoreTokens),
-          seenSessions: stringArray(parsed.seenSessions),
-        };
-      } catch {
-        return undefined;
-      }
+      const parsed = readJson(path);
+      if (typeof parsed !== "object" || parsed === null) return undefined;
+      const saved = parsed as Record<string, unknown>;
+      if (saved.version !== STATE_VERSION) return undefined;
+      return {
+        drops: stringArray(saved.drops),
+        keeps: stringArray(saved.keeps),
+        rewrites: rewriteEntries(saved.rewrites),
+        lastFullScoreTokens: tokenEntries(saved.lastFullScoreTokens),
+        lastScoredGoals: goalEntries(saved.lastScoredGoals),
+        seenSessions: stringArray(saved.seenSessions),
+      };
     },
     save(snapshot) {
-      mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-      const temporaryPath = `${path}.${process.pid}.tmp`;
-      writeFileSync(
-        temporaryPath,
-        JSON.stringify({ version: STATE_VERSION, ...snapshot }),
-        { mode: 0o600 },
-      );
-      chmodSync(temporaryPath, 0o600);
-      renameSync(temporaryPath, path);
+      writeJsonAtomic(path, { version: STATE_VERSION, ...snapshot });
     },
   };
 }

@@ -1,4 +1,4 @@
-import { loadConfig } from "../src/config.js";
+import { loadConfig, withoutCredentials } from "../src/config.js";
 
 describe("loadConfig", () => {
   test("loads documented defaults", () => {
@@ -24,6 +24,24 @@ describe("loadConfig", () => {
     expect(config.jevModel).toBe("jev-latest");
     expect(config.jevBaseUrl).toBe("https://api.typesafe.ai");
     expect(config.anthropicUpstreamUrl).toBe("https://api.anthropic.com");
+  });
+
+  test("treats the example placeholder key as no key", () => {
+    expect(() =>
+      loadConfig({ TYPESAFE_API_KEY: "tsf_replace_with_your_key" }),
+    ).toThrow("TYPESAFE_API_KEY is required");
+    expect(
+      loadConfig({
+        TYPESAFE_API_KEY: "tsf_replace_with_your_key",
+        JEV_PRUNE_ENABLED: "false",
+      }).jevApiKey,
+    ).toBeUndefined();
+  });
+
+  test("hides credentials in a URL shown to the user", () => {
+    expect(withoutCredentials("https://user:secret@gateway.example/v1")).toBe(
+      "https://gateway.example/v1",
+    );
   });
 
   test("rejects a trigger below the normal threshold", () => {

@@ -12,8 +12,10 @@ import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { parse } from "dotenv";
 import { findCanaryCandidates, type CanaryCandidate } from "./setupCanary.js";
-import { CanaryMode } from "./services/canaryMode.js";
-import { repository, slashCommands } from "./paths.js";
+import { defaultStatePath, hasRealKey } from "./config.js";
+import { envPath, repository } from "./checkout.js";
+import { commandsDirectory, slashCommands } from "./installation.js";
+import { CanaryMode, canaryModePath } from "./services/canaryMode.js";
 
 function setEnv(raw: string, name: string, value: string): string {
   const line = `${name}=${JSON.stringify(value)}`;
@@ -60,16 +62,13 @@ async function main(): Promise<void> {
       supplied ??
       (await cli.question(`Claude project directory [${process.cwd()}]: `));
     const project = resolve(projectAnswer.trim() || process.cwd());
-    const envPath = join(repository, ".env");
     let raw = existsSync(envPath) ? readFileSync(envPath, "utf8") : "";
     const existing = parse(raw);
-    if (
-      !existing.TYPESAFE_API_KEY ||
-      existing.TYPESAFE_API_KEY === "tsf_replace_with_your_key"
-    ) {
+    if (!hasRealKey(existing.TYPESAFE_API_KEY)) {
       const key = (
-        process.env.TYPESAFE_API_KEY ||
-        (await askSecret("TypeSafe API key (hidden while you type): "))
+        hasRealKey(process.env.TYPESAFE_API_KEY)
+          ? process.env.TYPESAFE_API_KEY
+          : await askSecret("TypeSafe API key (hidden while you type): ")
       ).trim();
       if (!key || /[\r\n]/.test(key))
         throw new Error("A TypeSafe API key is required.");
@@ -121,17 +120,14 @@ async function main(): Promise<void> {
     raw = setEnv(raw, "JEV_PRUNE_NOTIFY", "true");
     writeFileSync(envPath, raw, { mode: 0o600 });
     chmodSync(envPath, 0o600);
-    const statePath =
-      parse(raw).JEV_PRUNE_STATE_PATH ||
-      join(homedir(), ".claude", "jev-prune-state.json");
-    new CanaryMode(`${statePath}.canary-mode.json`).setAutoPrune(false);
+    const statePath = parse(raw).JEV_PRUNE_STATE_PATH || defaultStatePath;
+    new CanaryMode(canaryModePath(statePath)).setAutoPrune(false);
 
-    const commandDirectory = join(homedir(), ".claude", "commands");
-    mkdirSync(commandDirectory, { recursive: true, mode: 0o700 });
+    mkdirSync(commandsDirectory, { recursive: true, mode: 0o700 });
     for (const command of slashCommands) {
       copyFileSync(
         join(repository, "commands", command),
-        join(commandDirectory, command),
+        join(commandsDirectory, command),
       );
     }
     process.stdout.write("Setup saved.\n");

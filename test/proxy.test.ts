@@ -130,6 +130,37 @@ afterEach(async () => {
 });
 
 describe("Anthropic proxy", () => {
+  test("adds pruning notices to the user turn only when notices are on", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const scorer: RelevanceScorer = {
+      async score(_goal, candidates) {
+        return new Map(
+          candidates.map((candidate) => [
+            candidate.toolUseId,
+            candidate.toolUseId === "call-old" ? 0.1 : 0.9,
+          ]),
+        );
+      },
+    };
+
+    await request(appFor(upstream.url, scorer, { notify: true }))
+      .post("/v1/messages")
+      .send(twoToolRequest);
+    await request(appFor(upstream.url, scorer, { notify: false }))
+      .post("/v1/messages")
+      .send(twoToolRequest);
+
+    const lastTurn = (index: number) =>
+      JSON.stringify(
+        (upstream.requests[index]?.body as AnthropicRequest).messages.at(-1),
+      );
+    expect(lastTurn(0)).toContain("[jev-prune] Pruned 1 stale tool result");
+    expect(lastTurn(1)).not.toContain("[jev-prune]");
+  });
+
   test("suggests manual pruning after repeated configured canary misses", async () => {
     const upstream = await startUpstream((_incoming, response) => {
       response.writeHead(200, { "content-type": "application/json" });
@@ -391,37 +422,6 @@ describe("Anthropic proxy", () => {
     expect(upstream.requests[0]?.body).toEqual(body);
   });
 
-  test("prunes below the threshold after a manual request for the session", async () => {
-    const upstream = await startUpstream((_incoming, response) => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end("{}");
-    });
-    const scorer: RelevanceScorer = {
-      async score(_goal, candidates) {
-        return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.1]));
-      },
-    };
-    const app = appFor(upstream.url, scorer, { pruneThreshold: 1_000_000 });
-
-    await request(app)
-      .post("/jev-prune/prune-next")
-      .send({ sessionId: "not valid!" })
-      .expect(400);
-    await request(app)
-      .post("/jev-prune/prune-next")
-      .send({ sessionId: "3aad60f3-2450-40f7-b360-c7499da5ba86" })
-      .expect(202, { queued: true });
-    await request(app)
-      .post("/v1/messages?beta=true")
-      .set("x-claude-code-session-id", "3aad60f3-2450-40f7-b360-c7499da5ba86")
-      .send(twoToolRequest)
-      .expect(200);
-
-    expect(
-      allToolUseIds(upstream.requests[0]?.body as AnthropicRequest),
-    ).toEqual([]);
-  });
-
   test("logs input and cache usage from JSON and streamed responses", async () => {
     const usage = {
       input_tokens: 12,
@@ -631,6 +631,7 @@ describe("Anthropic proxy", () => {
       pid: process.pid,
       jev_configured: true,
       pruning_enabled: true,
+      upstream: upstream.url,
       requests: 7,
       pruning_decisions: 3,
       dropped_pairs: 2,

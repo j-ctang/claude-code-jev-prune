@@ -27,6 +27,8 @@ const setupAgain = args[0] === "--setup";
 if (setupAgain) args.shift();
 const project = resolve(args[0] && !args[0].startsWith("-") ? args.shift() : process.cwd());
 
+// Runs before the build, so it cannot import src/config.ts. The placeholder
+// must match PLACEHOLDER_KEY there; test/bootstrap.test.ts checks it.
 function hasConfiguredKey() {
   const envPath = join(repository, ".env");
   if (!existsSync(envPath)) return false;

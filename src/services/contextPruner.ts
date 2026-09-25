@@ -14,6 +14,7 @@ import {
   nothingToPruneNotice,
   prunedNotice,
   resumedNotice,
+  type PruneTrigger,
 } from "./pruneNotices.js";
 import {
   applyDecisions,
@@ -21,24 +22,23 @@ import {
   loadsToolDefinitions,
 } from "./toolPairs.js";
 import { findSuperseded, trimOutput, type Superseded } from "./toolRewrites.js";
-import { appendNotice, readTurn, type Turn } from "./turn.js";
+import { readTurn, type Turn } from "./turn.js";
 
 interface ContextPrunerOptions {
   config: Config;
   scorer: RelevanceScorer;
   logger?: AppLogger;
   maxCachedDrops?: number;
-  now?: () => number;
   stateStore?: PruneStateStore;
 }
 
 export interface PruneOptions {
   sessionId?: string;
+  /** Prune on this new user turn even below the automatic threshold. */
+  trigger?: PruneTrigger;
 }
 
 const DEFAULT_SESSION = "default";
-const MANUAL_PRUNE_TTL_MS = 10 * 60 * 1000;
-const MAX_PENDING_MANUAL_PRUNES = 1_000;
 
 type SkipReason = "disabled" | "below-threshold" | "mid-task" | "no-candidates";
 
@@ -46,10 +46,16 @@ function skipped(
   request: AnthropicRequest,
   beforeTokens: number,
   afterTokens: number,
-  dropped: number,
   reason: SkipReason,
 ): PruneResult {
-  return { request, beforeTokens, afterTokens, evaluated: 0, dropped, reason };
+  return {
+    request,
+    beforeTokens,
+    afterTokens,
+    evaluated: 0,
+    dropped: 0,
+    reason,
+  };
 }
 
 /**
@@ -62,14 +68,11 @@ export class ContextPruner {
   private readonly scorer: RelevanceScorer;
   private readonly logger: AppLogger | undefined;
   private readonly memory: DecisionMemory;
-  private readonly now: () => number;
-  private readonly manualPrunes = new Map<string, number>();
 
   constructor(options: ContextPrunerOptions) {
     this.config = options.config;
     this.scorer = options.scorer;
     this.logger = options.logger;
-    this.now = options.now ?? Date.now;
     this.memory = new DecisionMemory({
       maxEntries: options.maxCachedDrops ?? 10_000,
       rescoreTokens: options.config.rescoreTokens,
@@ -78,34 +81,23 @@ export class ContextPruner {
     });
   }
 
-  /**
-   * Queues a prune for the session's next new user turn, even below the
-   * automatic threshold. Pending requests expire after ten minutes.
-   */
-  requestManualPrune(sessionId: string): void {
-    this.manualPrunes.delete(sessionId);
-    this.manualPrunes.set(sessionId, this.now() + MANUAL_PRUNE_TTL_MS);
-    while (this.manualPrunes.size > MAX_PENDING_MANUAL_PRUNES) {
-      const oldest = this.manualPrunes.keys().next().value as
-        string | undefined;
-      if (oldest === undefined) break;
-      this.manualPrunes.delete(oldest);
-    }
-  }
-
   async prune(
     request: AnthropicRequest,
     options: PruneOptions = {},
   ): Promise<PruneResult> {
     const beforeTokens = estimateTokens(request);
     if (!this.config.pruningEnabled) {
-      return skipped(request, beforeTokens, beforeTokens, 0, "disabled");
+      return skipped(request, beforeTokens, beforeTokens, "disabled");
     }
     const { sessionId } = options;
     const turn = readTurn(request);
     const firstSeen = this.memory.markSessionSeen(sessionId);
-    const manual =
-      this.takeManualPrune(turn, sessionId) || turn.command === "jev-prune";
+    const trigger = !turn.newUserTurn
+      ? undefined
+      : turn.command === "jev-prune"
+        ? "manual"
+        : options.trigger;
+    const manual = trigger !== undefined;
     const belowThreshold = (result: PruneResult) =>
       this.withResumeNotice(result, request, turn, firstSeen);
     const threshold = this.config.pruneThreshold;
@@ -115,12 +107,11 @@ export class ContextPruner {
     // must still be re-applied, or the pruned output would come back.
     if (!manual && this.memory.isEmpty && beforeTokens < threshold) {
       return belowThreshold(
-        skipped(request, beforeTokens, beforeTokens, 0, "below-threshold"),
+        skipped(request, beforeTokens, beforeTokens, "below-threshold"),
       );
     }
 
     let current = request;
-    let dropped = new Set<string>();
     let newRewrites = false;
     try {
       const candidates = extractCandidates(request);
@@ -129,7 +120,6 @@ export class ContextPruner {
           request,
           beforeTokens,
           beforeTokens,
-          0,
           manual || beforeTokens >= threshold
             ? "no-candidates"
             : "below-threshold",
@@ -145,32 +135,18 @@ export class ContextPruner {
           !this.config.excludeTools.has(candidate.toolName) &&
           !loadsToolDefinitions(candidate.result),
       );
-      const saved = this.memory.recall(allowed);
-      dropped = saved.dropped;
-      const rewrites = saved.rewrites;
+      const { dropped, rewrites } = this.memory.recall(allowed);
       current = applyDecisions(request, dropped, rewrites);
       const cachedTokens = estimateTokens(current);
       if (!manual && cachedTokens < threshold) {
         return belowThreshold(
-          skipped(
-            current,
-            beforeTokens,
-            cachedTokens,
-            dropped.size,
-            "below-threshold",
-          ),
+          skipped(current, beforeTokens, cachedTokens, "below-threshold"),
         );
       }
       // Pruning mid-task would cut context the agent is actively using, so new
       // decisions only happen when the user starts a new turn.
       if (!turn.newUserTurn) {
-        return skipped(
-          current,
-          beforeTokens,
-          cachedTokens,
-          dropped.size,
-          "mid-task",
-        );
+        return skipped(current, beforeTokens, cachedTokens, "mid-task");
       }
 
       // Cheap mechanical rewrites run before Jev: superseded outputs become a
@@ -257,7 +233,6 @@ export class ContextPruner {
           current,
           beforeTokens,
           cachedTokens,
-          dropped.size,
           "no-candidates",
         );
         return eligible.length === 0
@@ -275,7 +250,7 @@ export class ContextPruner {
       }
       this.memory.save();
       const aboveTarget = afterTokens > this.config.targetTokens;
-      const notice = prunedNotice(this.config, manual, {
+      const notice = prunedNotice(this.config, trigger, {
         dropped: newlyDropped.length,
         superseded: newStubs.size,
         trimmed,
@@ -284,11 +259,11 @@ export class ContextPruner {
         aboveTarget,
       });
       return {
-        request: this.withNotice(prunedRequest, notice),
+        request: prunedRequest,
         beforeTokens,
         afterTokens,
         evaluated: toScore.length,
-        dropped: dropped.size,
+        dropped: newlyDropped.length,
         removedTokens: Math.max(0, cachedTokens - afterTokens),
         superseded: newStubs.size,
         trimmed,
@@ -304,7 +279,7 @@ export class ContextPruner {
         beforeTokens,
         afterTokens: estimateTokens(current),
         evaluated: 0,
-        dropped: dropped.size,
+        dropped: 0,
         reason: "fail-open",
         failureReason: loggableReason(error),
       };
@@ -371,13 +346,6 @@ export class ContextPruner {
     return drops;
   }
 
-  private withNotice(
-    request: AnthropicRequest,
-    notice: string,
-  ): AnthropicRequest {
-    return this.config.notify ? appendNotice(request, notice) : request;
-  }
-
   /**
    * A session seen for the first time that already has history is a resumed
    * conversation. Below the automatic threshold, suggest /jev-prune instead
@@ -403,8 +371,7 @@ export class ContextPruner {
       ...result,
       resumed: true,
       notice,
-      request: this.withNotice(result.request, notice),
-    };
+          };
   }
 
   private withNothingToPrune(
@@ -417,15 +384,6 @@ export class ContextPruner {
       ...result,
       manual,
       notice,
-      request: this.withNotice(result.request, notice),
-    };
-  }
-
-  private takeManualPrune(turn: Turn, sessionId: string | undefined): boolean {
-    if (sessionId === undefined || !turn.newUserTurn) return false;
-    const expiresAt = this.manualPrunes.get(sessionId);
-    if (expiresAt === undefined) return false;
-    this.manualPrunes.delete(sessionId);
-    return expiresAt > this.now();
+          };
   }
 }

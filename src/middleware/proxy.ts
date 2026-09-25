@@ -7,14 +7,15 @@ import type { AnthropicRequest, PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
 import { CanaryPolicy } from "../services/canary.js";
+import type { PruneOptions } from "../services/contextPruner.js";
+import { recordPruneOutcome } from "../services/pruneLog.js";
 import { appendNotice } from "../services/turn.js";
 
 interface RequestPruner {
   prune(
     request: AnthropicRequest,
-    options?: { sessionId?: string },
+    options?: PruneOptions,
   ): Promise<PruneResult>;
-  requestManualPrune?(sessionId: string): void;
 }
 
 export const SESSION_HEADER = "x-claude-code-session-id";
@@ -131,50 +132,23 @@ async function forward(
     const startedAt = Date.now();
     const sessionId = request.get(SESSION_HEADER);
     const canary = canaryPolicy.check(body, sessionId);
-    if (canary.prune && sessionId) {
-      dependencies.pruner.requestManualPrune?.(sessionId);
-    }
-    const result = await dependencies.pruner.prune(
-      body,
-      sessionId ? { sessionId } : {},
+    const result = await dependencies.pruner.prune(body, {
+      ...(sessionId ? { sessionId } : {}),
+      ...(canary.prune ? { trigger: "canary" as const } : {}),
+    });
+    // Every notice for Claude is added here, and only when notices are on.
+    const notices = [result.notice, canary.notice].filter(
+      (notice): notice is string => notice !== undefined,
     );
-    body =
-      canary.notice && dependencies.config.notify
-        ? appendNotice(result.request, canary.notice)
-        : result.request;
-    dependencies.stats.pruningDecisions += result.evaluated;
-    dependencies.stats.droppedPairs += result.dropped;
-    if (result.reason === "fail-open") {
-      dependencies.stats.failOpenEvents += 1;
-      dependencies.logger.warn("prune_fail_open", {
-        error: result.failureReason ?? "unknown pruning error",
-        durationMs: Date.now() - startedAt,
-      });
-    } else if (result.resumed) {
-      dependencies.logger.info("resume_notice", {
-        tokens: result.afterTokens,
-      });
-    } else if (result.reason === "pruned") {
-      dependencies.stats.prunes += 1;
-      dependencies.stats.tokensRemoved += result.removedTokens ?? 0;
-      dependencies.logger.info("prune_complete", {
-        beforeTokens: result.beforeTokens,
-        afterTokens: result.afterTokens,
-        evaluated: result.evaluated,
-        dropped: result.dropped,
-        removedTokens: result.removedTokens ?? 0,
-        superseded: result.superseded ?? 0,
-        trimmed: result.trimmed ?? 0,
-        manual: result.manual ?? false,
-        durationMs: Date.now() - startedAt,
-      });
-      if (result.aboveTarget) {
-        dependencies.logger.warn("prune_above_target", {
-          afterTokens: result.afterTokens,
-          targetTokens: dependencies.config.targetTokens,
-        });
-      }
-    }
+    body = dependencies.config.notify
+      ? notices.reduce(appendNotice, result.request)
+      : result.request;
+    recordPruneOutcome(result, {
+      stats: dependencies.stats,
+      logger: dependencies.logger,
+      targetTokens: dependencies.config.targetTokens,
+      durationMs: Date.now() - startedAt,
+    });
   }
 
   const headers = requestHeaders(request);
