@@ -1,6 +1,43 @@
 import { loadConfig, withoutCredentials } from "../src/config.js";
 
 describe("loadConfig", () => {
+  test("loads model routing defaults and overrides", () => {
+    expect(loadConfig({ TYPESAFE_API_KEY: "secret" })).toMatchObject({
+      routeDefaultModel: "claude-opus-5-5",
+      routeHardModel: "claude-fable-5-1",
+      routeUpThreshold: 0.7,
+      routeDownThreshold: 0.4,
+    });
+    expect(
+      loadConfig({
+        TYPESAFE_API_KEY: "secret",
+        JEV_ROUTE_DEFAULT_MODEL: "claude-sonnet-5",
+        JEV_ROUTE_HARD_MODEL: "claude-opus-5-5",
+        JEV_ROUTE_UP_THRESHOLD: "0.8",
+        JEV_ROUTE_DOWN_THRESHOLD: "0.3",
+      }),
+    ).toMatchObject({
+      routeDefaultModel: "claude-sonnet-5",
+      routeHardModel: "claude-opus-5-5",
+      routeUpThreshold: 0.8,
+      routeDownThreshold: 0.3,
+    });
+  });
+
+  test("rejects invalid model routing settings", () => {
+    const load = (env: Record<string, string>) => () =>
+      loadConfig({ TYPESAFE_API_KEY: "secret", ...env });
+
+    expect(load({ JEV_ROUTE_UP_THRESHOLD: "1.5" })).toThrow(
+      "JEV_ROUTE_UP_THRESHOLD must be a number between 0 and 1",
+    );
+    expect(load({ JEV_ROUTE_DOWN_THRESHOLD: "0.7" })).toThrow(
+      "JEV_ROUTE_DOWN_THRESHOLD must be less than JEV_ROUTE_UP_THRESHOLD",
+    );
+    expect(load({ JEV_ROUTE_HARD_MODEL: "claude-opus-5-5" })).toThrow(
+      "JEV_ROUTE_HARD_MODEL must differ from JEV_ROUTE_DEFAULT_MODEL",
+    );
+  });
   test("loads documented defaults", () => {
     const config = loadConfig({ TYPESAFE_API_KEY: "secret" });
 
