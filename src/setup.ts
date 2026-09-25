@@ -7,15 +7,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join, resolve } from "node:path";
 import { createInterface } from "node:readline/promises";
 import { Writable } from "node:stream";
 import { parse } from "dotenv";
 import { findCanaryCandidates, type CanaryCandidate } from "./setupCanary.js";
 import { CanaryMode } from "./services/canaryMode.js";
-
-const repository = dirname(dirname(fileURLToPath(import.meta.url)));
+import { repository, slashCommands } from "./paths.js";
 
 function setEnv(raw: string, name: string, value: string): string {
   const line = `${name}=${JSON.stringify(value)}`;
@@ -130,11 +128,7 @@ async function main(): Promise<void> {
 
     const commandDirectory = join(homedir(), ".claude", "commands");
     mkdirSync(commandDirectory, { recursive: true, mode: 0o700 });
-    for (const command of [
-      "jev-prune.md",
-      "jev-prune-auto.md",
-      "jev-prune-auto-off.md",
-    ]) {
+    for (const command of slashCommands) {
       copyFileSync(
         join(repository, "commands", command),
         join(commandDirectory, command),

@@ -1,13 +1,11 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { config as loadEnv } from "dotenv";
-import { loadConfig, type Config } from "./config.js";
+import { DEFAULT_PORT, loadConfig, type Config } from "./config.js";
+import { logPath, repository, slashCommands } from "./paths.js";
 import { probe } from "./proxyHealth.js";
-
-const repository = dirname(dirname(fileURLToPath(import.meta.url)));
 
 interface Check {
   ok: boolean | "warn";
@@ -88,7 +86,7 @@ async function main(): Promise<void> {
     });
   }
 
-  const port = config?.port ?? 5590;
+  const port = config?.port ?? DEFAULT_PORT;
   try {
     const health = await probe(`http://127.0.0.1:${port}`);
     checks.push({
@@ -106,15 +104,14 @@ async function main(): Promise<void> {
   }
 
   const commands = join(homedir(), ".claude", "commands");
-  const stale = ["jev-prune.md", "jev-prune-auto.md", "jev-prune-auto-off.md"]
-    .filter((name) => {
-      const installed = join(commands, name);
-      return (
-        !existsSync(installed) ||
-        readFileSync(installed, "utf8") !==
-          readFileSync(join(repository, "commands", name), "utf8")
-      );
-    });
+  const stale = slashCommands.filter((name) => {
+    const installed = join(commands, name);
+    return (
+      !existsSync(installed) ||
+      readFileSync(installed, "utf8") !==
+        readFileSync(join(repository, "commands", name), "utf8")
+    );
+  });
   checks.push(
     stale.length === 0
       ? { ok: true, label: "Slash commands installed" }
@@ -144,12 +141,13 @@ async function main(): Promise<void> {
   }
 
   for (const check of checks) {
-    const mark = check.ok === true ? "ok  " : check.ok === "warn" ? "warn" : "FAIL";
+    const mark =
+      check.ok === true ? "ok  " : check.ok === "warn" ? "warn" : "FAIL";
     process.stdout.write(`${mark}  ${check.label}\n`);
     if (check.ok !== true && check.fix)
       process.stdout.write(`      ${check.fix}\n`);
   }
-  process.stdout.write(`Log: ${join(homedir(), ".claude", "jev-prune.log")}\n`);
+  process.stdout.write(`Log: ${logPath}\n`);
   if (checks.some((check) => check.ok === false)) process.exitCode = 1;
 }
 

@@ -6,6 +6,7 @@ import type {
   PruneStateStore,
   Rewrite,
 } from "./pruneState.js";
+import { appendNotice, lastTurnIndex, messageText } from "./messages.js";
 import { findSuperseded, trimOutput } from "./toolRewrites.js";
 import type {
   AnthropicRequest,
@@ -422,7 +423,7 @@ export class ContextPruner {
       });
       return {
         request: this.config.notify
-          ? this.appendNotice(prunedRequest, notice)
+          ? appendNotice(prunedRequest, notice)
           : prunedRequest,
         beforeTokens,
         afterTokens,
@@ -466,18 +467,6 @@ export class ContextPruner {
       dropped,
       reason,
     };
-  }
-
-  /**
-   * Claude Code may append `system` messages (hook context) after the user's
-   * turn, so the turn boundary is judged from the last user/assistant message.
-   */
-  private lastTurnIndex(request: AnthropicRequest): number {
-    for (let index = request.messages.length - 1; index >= 0; index -= 1) {
-      const role = request.messages[index]?.role;
-      if (role === "user" || role === "assistant") return index;
-    }
-    return -1;
   }
 
   private restore(saved: PruneStateSnapshot): void {
@@ -552,7 +541,7 @@ export class ContextPruner {
       resumed: true,
       notice,
       request: this.config.notify
-        ? this.appendNotice(result.request, notice)
+        ? appendNotice(result.request, notice)
         : result.request,
     };
   }
@@ -568,24 +557,16 @@ export class ContextPruner {
       manual,
       notice,
       request: this.config.notify
-        ? this.appendNotice(result.request, notice)
+        ? appendNotice(result.request, notice)
         : result.request,
     };
   }
 
   private invokesManualCommand(request: AnthropicRequest): boolean {
     if (!this.isNewUserTurn(request)) return false;
-    const last = request.messages[this.lastTurnIndex(request)];
+    const last = request.messages[lastTurnIndex(request)];
     if (!last) return false;
-    if (typeof last.content === "string") {
-      return MANUAL_COMMAND.test(last.content);
-    }
-    return last.content.some(
-      (block) =>
-        block.type === "text" &&
-        typeof block.text === "string" &&
-        MANUAL_COMMAND.test(block.text),
-    );
+    return MANUAL_COMMAND.test(messageText(last));
   }
 
   private takeManualPrune(
@@ -600,7 +581,7 @@ export class ContextPruner {
   }
 
   private isNewUserTurn(request: AnthropicRequest): boolean {
-    const last = request.messages[this.lastTurnIndex(request)];
+    const last = request.messages[lastTurnIndex(request)];
     if (!last || last.role !== "user") return false;
     if (typeof last.content === "string") return true;
     return !last.content.some((block) => isToolResult(block));
@@ -637,25 +618,6 @@ export class ContextPruner {
       "Tell the user in one short line and suggest writing a handoff file " +
       "for a fresh session."
     );
-  }
-
-  private appendNotice(
-    request: AnthropicRequest,
-    notice: string,
-  ): AnthropicRequest {
-    const index = this.lastTurnIndex(request);
-    const last = request.messages[index];
-    if (!last) return request;
-    const content =
-      typeof last.content === "string"
-        ? [{ type: "text", text: last.content }]
-        : last.content;
-    const messages = [...request.messages];
-    messages[index] = {
-      ...last,
-      content: [...content, { type: "text", text: notice }],
-    };
-    return { ...request, messages };
   }
 
   private touchCachedDrop(key: string): boolean {
@@ -730,17 +692,7 @@ export class ContextPruner {
     for (let index = request.messages.length - 1; index >= 0; index -= 1) {
       const message = request.messages[index];
       if (!message || message.role !== "user") continue;
-      if (typeof message.content === "string" && message.content.trim()) {
-        return message.content;
-      }
-      if (!Array.isArray(message.content)) continue;
-      const text = message.content
-        .filter(
-          (block) => block.type === "text" && typeof block.text === "string",
-        )
-        .map((block) => String(block.text))
-        .join("\n")
-        .trim();
+      const text = messageText(message).trim();
       if (text) return text;
     }
     return "Complete the current task.";

@@ -1,18 +1,17 @@
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
 import { loadConfig } from "./config.js";
 import { formatTokens, probe, type ProxyHealth } from "./proxyHealth.js";
+import { logPath, repository } from "./paths.js";
 import {
   liveSessions,
   registerSession,
   unregisterSession,
 } from "./sessions.js";
-
-const repository = dirname(dirname(fileURLToPath(import.meta.url)));
 
 /** A proxy started before the last build still runs the old code. */
 function isOutdated(health: ProxyHealth): boolean {
@@ -41,9 +40,7 @@ async function startProxy(baseUrl: string): Promise<void> {
     await new Promise((done) => setTimeout(done, 100));
     if (await probe(baseUrl).catch(() => undefined)) return;
   }
-  throw new Error(
-    "Jev Prune proxy did not start; check ~/.claude/jev-prune.log",
-  );
+  throw new Error(`Jev Prune proxy did not start; check ${logPath}`);
 }
 
 async function main(): Promise<void> {

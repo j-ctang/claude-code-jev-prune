@@ -1,6 +1,8 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 
+export const DEFAULT_PORT = 5590;
+
 export interface Config {
   port: number;
   pruningEnabled: boolean;
@@ -116,7 +118,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   }
 
   return {
-    port: parseInteger(env.PORT ?? "5590", "PORT", 1, 65_535),
+    port: parseInteger(env.PORT ?? String(DEFAULT_PORT), "PORT", 1, 65_535),
     pruningEnabled,
     pruneThreshold,
     triggerTokens,

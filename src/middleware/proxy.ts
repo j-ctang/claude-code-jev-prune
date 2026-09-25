@@ -6,8 +6,8 @@ import type { Config } from "../config.js";
 import type { AnthropicRequest, PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
-import { CanaryMonitor } from "../services/canary.js";
-import { CanaryMode } from "../services/canaryMode.js";
+import { CanaryPolicy } from "../services/canary.js";
+import { appendNotice } from "../services/messages.js";
 
 interface RequestPruner {
   prune(
@@ -68,26 +68,6 @@ function isAnthropicRequest(value: unknown): value is AnthropicRequest {
   );
 }
 
-function canaryCommand(request: AnthropicRequest): "on" | "off" | undefined {
-  const last = [...request.messages]
-    .reverse()
-    .find((message) => message.role === "user");
-  if (!last) return undefined;
-  const text =
-    typeof last.content === "string"
-      ? last.content
-      : last.content
-          .filter(
-            (block) => block.type === "text" && typeof block.text === "string",
-          )
-          .map((block) => String(block.text))
-          .join("\n");
-  if (/<command-name>\/jev-prune-auto<\/command-name>/.test(text)) return "on";
-  if (/<command-name>\/jev-prune-auto-off<\/command-name>/.test(text))
-    return "off";
-  return undefined;
-}
-
 function hopByHopFilter(
   blocklist: ReadonlySet<string>,
   connection: string | null | undefined,
@@ -137,8 +117,7 @@ async function forward(
   request: Request,
   response: Response,
   dependencies: ProxyDependencies,
-  canary: CanaryMonitor,
-  canaryMode: CanaryMode,
+  canaryPolicy: CanaryPolicy,
 ): Promise<void> {
   dependencies.stats.requests += 1;
   let body = request.body as unknown;
@@ -151,65 +130,18 @@ async function forward(
   ) {
     const startedAt = Date.now();
     const sessionId = request.get(SESSION_HEADER);
-    const command = canaryCommand(body);
-    let commandNotice: string | undefined;
-    if (command && dependencies.config.canaryPrefix) {
-      try {
-        canaryMode.setAutoPrune(command === "on");
-        commandNotice =
-          command === "on"
-            ? "[jev-prune] Automatic pruning on future canary misses is enabled."
-            : "[jev-prune] Automatic pruning on canary misses is disabled.";
-      } catch (error) {
-        dependencies.logger.warn("canary_mode_save_failed", {
-          error: error instanceof Error ? error.name : "unknown error",
-        });
-        commandNotice = "[jev-prune] Could not save the canary setting.";
-      }
-    }
-    const canaryMissed = Boolean(sessionId && canary.observe(sessionId, body));
-    const autoPrune = canaryMode.hasPreference
-      ? canaryMode.autoPrune
-      : dependencies.config.canaryAction === "prune";
-    if (canaryMissed && autoPrune && sessionId) {
+    const canary = canaryPolicy.check(body, sessionId);
+    if (canary.prune && sessionId) {
       dependencies.pruner.requestManualPrune?.(sessionId);
-      dependencies.logger.warn("canary_prune_requested", { sessionId });
     }
     const result = await dependencies.pruner.prune(
       body,
       sessionId ? { sessionId } : {},
     );
-    body = result.request;
-    if (
-      ((canaryMissed && !autoPrune) || commandNotice) &&
-      dependencies.config.notify
-    ) {
-      const candidate = body as AnthropicRequest;
-      const messages = [...candidate.messages];
-      let index = messages.length - 1;
-      while (index >= 0 && messages[index]?.role !== "user") index -= 1;
-      const last = messages[index];
-      if (last) {
-        const content =
-          typeof last.content === "string"
-            ? [{ type: "text", text: last.content }]
-            : last.content;
-        messages[index] = {
-          ...last,
-          content: [
-            ...content,
-            {
-              type: "text",
-              text:
-                commandNotice ??
-                "[jev-prune] The configured response prefix was missed again. This is an advisory signal; run /jev-prune now or /jev-prune-auto to prune automatically on future misses.",
-            },
-          ],
-        };
-        body = { ...candidate, messages };
-        dependencies.logger.warn("canary_missed", { sessionId });
-      }
-    }
+    body =
+      canary.notice && dependencies.config.notify
+        ? appendNotice(result.request, canary.notice)
+        : result.request;
     dependencies.stats.pruningDecisions += result.evaluated;
     dependencies.stats.droppedPairs += result.dropped;
     if (result.reason === "fail-open") {
@@ -306,12 +238,12 @@ async function forward(
 export function createProxyHandler(
   dependencies: ProxyDependencies,
 ): RequestHandler {
-  const canary = new CanaryMonitor(dependencies.config.canaryPrefix ?? "");
-  const canaryMode = new CanaryMode(
-    `${dependencies.config.statePath}.canary-mode.json`,
+  const canaryPolicy = new CanaryPolicy(
+    dependencies.config,
+    dependencies.logger,
   );
   return (request: Request, response: Response, next: NextFunction) => {
-    void forward(request, response, dependencies, canary, canaryMode).catch(
+    void forward(request, response, dependencies, canaryPolicy).catch(
       (error: unknown) => {
         dependencies.logger.error("proxy_response_failed", {
           error: error instanceof Error ? error.message : "unknown error",

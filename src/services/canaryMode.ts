@@ -9,10 +9,11 @@ import { dirname } from "node:path";
 
 /** The user's persistent choice to prune automatically on canary misses. */
 export class CanaryMode {
-  autoPrune = false;
-  hasPreference = false;
-
-  constructor(private readonly path: string) {
+  /** `autoPrune` is the default until the user saves a choice. */
+  constructor(
+    private readonly path: string,
+    public autoPrune = false,
+  ) {
     try {
       const saved: unknown = JSON.parse(readFileSync(path, "utf8"));
       if (
@@ -22,10 +23,9 @@ export class CanaryMode {
         typeof saved.autoPrune === "boolean"
       ) {
         this.autoPrune = saved.autoPrune;
-        this.hasPreference = true;
       }
     } catch {
-      // A missing or malformed preference leaves suggestion mode in place.
+      // A missing or malformed preference keeps the default.
     }
   }
 
@@ -38,6 +38,5 @@ export class CanaryMode {
     chmodSync(temporary, 0o600);
     renameSync(temporary, this.path);
     this.autoPrune = enabled;
-    this.hasPreference = true;
   }
 }
