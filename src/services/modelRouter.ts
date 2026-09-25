@@ -85,6 +85,8 @@ export function conversationKey(
  */
 export class ModelRouter {
   private readonly conversations = new Map<string, ConversationState>();
+  /** First conversation seen per session: the main thread, not a subagent. */
+  private readonly mainConversations = new Map<string, string>();
 
   constructor(
     private readonly config: RouterConfig,
@@ -105,6 +107,7 @@ export class ModelRouter {
       return commandNotice ? { notice: commandNotice } : {};
     }
     const conversation = conversationKey(request, sessionId);
+    const main = this.isMain(conversation, sessionId);
     const state = this.stateFor(conversation);
     if (state.unavailable)
       return this.decision(conversation, state, commandNotice);
@@ -126,7 +129,7 @@ export class ModelRouter {
       return this.decision(
         conversation,
         state,
-        await this.decide(turn, state, conversation),
+        await this.decide(turn, state, conversation, main),
       );
     }
     return this.decision(conversation, state, commandNotice);
@@ -144,6 +147,7 @@ export class ModelRouter {
     turn: Turn,
     state: ConversationState,
     conversation: string,
+    main: boolean,
   ): Promise<string | undefined> {
     let scores: ReadonlyMap<string, number>;
     try {
@@ -167,7 +171,8 @@ export class ModelRouter {
 
     if (!up && hard >= this.config.routeUpThreshold) {
       if (this.mode.choice === "ask") {
-        if (!this.config.notify) return undefined;
+        // Only the main thread can reach the user; subagents stay put.
+        if (!this.config.notify || !main) return undefined;
         state.askedHard = true;
         return `[jev-prune] This prompt looks hard. Do not start it yet. In one short line, tell the user that jev-prune can move hard prompts to ${this.config.routeHardModel} automatically, and ask them to run /jev-route-auto to turn it on or /jev-route-off to keep the current model.`;
       }
@@ -253,6 +258,13 @@ export class ModelRouter {
     };
     this.remember(this.conversations, conversation, state);
     return state;
+  }
+
+  private isMain(conversation: string, sessionId?: string): boolean {
+    if (sessionId === undefined) return true;
+    const main = this.mainConversations.get(sessionId) ?? conversation;
+    this.remember(this.mainConversations, sessionId, main);
+    return main === conversation;
   }
 
   /** Map order is recency: re-insert on use, drop the least recent. */

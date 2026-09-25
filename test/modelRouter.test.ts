@@ -225,6 +225,18 @@ describe("ModelRouter in auto mode", () => {
     expect(next).toEqual({ conversation: first.conversation, model: HARD });
   });
 
+  test("a subagent on the default model still routes", async () => {
+    const { router: subject } = await router(
+      scriptedAsker({ hard: 0.1, continues: 0 }, { hard: 0.9, continues: 0 }),
+      "auto",
+    );
+
+    await subject.route(turn(["Rename a variable"]), "s");
+    const subagent = await subject.route(turn(["Audit every module"]), "s");
+
+    expect(subagent.model).toBe(HARD);
+  });
+
   test("a new first message starts a new conversation", () => {
     expect(conversationKey(turn(["A", "B"]), "s")).toBe(
       conversationKey(turn(["A", "C"]), "s"),
@@ -272,6 +284,38 @@ describe("ModelRouter memory", () => {
     const loop = await subject.route(toolLoop(["Redesign auth"]), "s");
 
     expect(loop.model).toBe(HARD);
+  });
+
+  test("forgets the least recently used session's main conversation", async () => {
+    const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
+    const hardWhenAsked: NoulAsker = {
+      async ask(state) {
+        const hard = String(state.newest_request).startsWith("Hard") ? 0.9 : 0;
+        return new Map([
+          ["hard", hard],
+          ["continues", 0],
+        ]);
+      },
+    };
+    const subject = new ModelRouter(
+      config,
+      hardWhenAsked,
+      new RouteMode(path),
+      silentLogger,
+      2,
+    );
+
+    await subject.route(turn(["Main one"]), "s1");
+    await subject.route(turn(["Main two"]), "s2");
+    await subject.route(turn(["Main one", "More"]), "s1");
+    await subject.route(turn(["Main three"]), "s3");
+    const kept = await subject.route(turn(["Hard subagent task"]), "s1");
+    await subject.route(turn(["Main four"]), "s4");
+    await subject.route(turn(["Main five"]), "s5");
+    const forgotten = await subject.route(turn(["Hard new task"]), "s1");
+
+    expect(kept.notice).toBeUndefined();
+    expect(forgotten.notice).toContain("/jev-route-auto");
   });
 });
 
@@ -331,6 +375,36 @@ describe("ModelRouter in ask mode", () => {
     expect(later).toEqual({});
     expect(asker.calls).toBe(0);
     expect(new RouteMode(path).choice).toBe("off");
+  });
+
+  test("asks only in the session's main conversation", async () => {
+    const asker = scriptedAsker(
+      { hard: 0.9, continues: 0 },
+      { hard: 0.9, continues: 0 },
+      { hard: 0.9, continues: 0 },
+    );
+    const { router: subject } = await router(asker);
+
+    const main = await subject.route(turn(["Redesign auth"]), "s");
+    const subagent = await subject.route(turn(["Audit every module"]), "s");
+    const other = await subject.route(turn(["Redesign billing"]), "t");
+
+    expect(main.notice).toContain("/jev-route-auto");
+    expect(subagent).toEqual({
+      conversation: conversationKey(turn(["Audit every module"]), "s"),
+    });
+    expect(other.notice).toContain("/jev-route-auto");
+  });
+
+  test("a request without a session is its own main conversation", async () => {
+    const { router: subject } = await router(
+      scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.9, continues: 0 }),
+    );
+
+    await subject.route(turn(["Redesign auth"]));
+    const next = await subject.route(turn(["Redesign billing"]));
+
+    expect(next.notice).toContain("/jev-route-auto");
   });
 
   test("does not ask when notices are off", async () => {
