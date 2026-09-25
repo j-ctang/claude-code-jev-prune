@@ -58,6 +58,12 @@ jev-prune --setup    # answer the setup questions again
 
 If your `CLAUDE.md` tells Claude to start every reply with a fixed word, setup can use it as a canary. When Claude stops using it, Jev Prune suggests `/jev-prune`. Type `/jev-prune-auto` to prune on those misses automatically, or `/jev-prune-auto-off` to go back to suggestions.
 
+## Model routing
+
+Jev Prune can answer hard prompts with a stronger model. The first time you send a hard prompt, Claude asks whether to turn this on. Type `/jev-route-auto` to turn it on, or `/jev-route-off` to keep your model. When routing is on, a hard prompt moves the conversation to the hard model, and the next easy, unrelated task moves it back. Claude tells you each time the model changes.
+
+Only requests on `JEV_ROUTE_DEFAULT_MODEL` are routed, so a model you pick with `/model` is never changed. If your account can't use the hard model, Jev Prune stays on your model and tells you.
+
 ## Settings
 
 Settings are in `.env` in this folder. The useful ones:
@@ -67,6 +73,8 @@ Settings are in `.env` in this folder. The useful ones:
 | `JEV_PRUNE_THRESHOLD` | `120000` | Context size that starts automatic pruning |
 | `JEV_PRUNE_KEEP_RECENT` | `5` | Newest tool results that are never pruned |
 | `JEV_PRUNE_ENABLED` | `true` | `false` passes everything through untouched |
+| `JEV_ROUTE_DEFAULT_MODEL` | `claude-opus-5-5` | Model for easy prompts; the only model that is routed |
+| `JEV_ROUTE_HARD_MODEL` | `claude-fable-5-1` | Model for hard prompts |
 | `PORT` | `5590` | Local port for the proxy |
 
 All settings are listed in [.env.example](./.env.example).

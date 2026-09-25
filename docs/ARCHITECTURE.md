@@ -19,7 +19,8 @@ Express application
        │    ├── extract safe candidates
        │    ├── apply protection policy
        │    ├── score candidates with Jev
-       │    └── remove selected pairs
+       │    ├── remove selected pairs
+       │    ├── route model
        └── forward to ANTHROPIC_UPSTREAM_URL
                     │
                     ▼
@@ -41,6 +42,8 @@ Express application
 | `src/services/toolRewrites.ts` | Stub superseded Reads and trim large outputs without calling Jev. |
 | `src/services/turn.ts` | Read the latest turn: new user turn, goal, slash command, last reply. |
 | `src/services/canary.ts` | Watch the response canary and handle `/jev-prune-auto` commands. |
+| `src/services/modelRouter.ts` | Decide per conversation whether to move a hard prompt to the hard model and back, and handle `/jev-route-*` commands. |
+| `src/services/routeMode.ts` | Save the `ask` / `auto` / `off` routing choice. |
 | `src/middleware/proxy.ts` | Forward headers/body, add notices for Claude, and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
 | `src/utils/logger.ts` | Write redacted structured events to console and disk. |
