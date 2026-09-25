@@ -49,7 +49,8 @@ Express application
 | `src/setup.ts` | Save the TypeSafe key and canary choice; install slash commands. |
 | `src/launch.ts` | Start or reuse the shared proxy, then run `claude` through it. |
 | `src/sessions.ts` | Count launchers so the last one to exit stops the proxy. |
-| `src/proxyHealth.ts` | Read a running proxy's `/health` for the launcher and CLI tools. |
+| `src/proxyClient.ts` | Find, start, watch, and stop the shared proxy through `/health`. |
+| `src/checkout.ts`, `src/installation.ts` | Hold every checkout and `~/.claude` path the launcher scripts use. |
 | `src/stats.ts`, `src/logSummary.ts` | Report prune totals from the log and the running proxy. |
 | `src/doctor.ts` | Check the install and explain how to fix each problem. |
 
@@ -165,7 +166,7 @@ Because native `fetch` may decompress an upstream response, stale `content-encod
 
 Logs are written to stderr and `~/.claude/jev-prune.log`. Normal pruning events contain estimated before/after sizes, evaluated and dropped counts, duration, and safe error messages. Debug decision events add tool name, tool-use ID, relevance, cutoff, and outcome. Payload content and credentials are never logged.
 
-`GET /health` reports configuration presence, enabled state, counters, and uptime. It deliberately does not call TypeSafe or Anthropic.
+`GET /health` reports configuration presence, enabled state, the upstream URL without credentials, counters, and uptime. It deliberately does not call TypeSafe or Anthropic.
 
 ## Verification Strategy
 
