@@ -708,6 +708,42 @@ describe("ContextPruner", () => {
       expect(observed.batches).toHaveLength(1);
     });
 
+    test("does not re-score kept results after a restart when the goal is unchanged", async () => {
+      const store = memoryStore();
+      const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+      const scorer = scorerReturning({ "call-old": 0.9, "call-new": 0.9 }, observed);
+      const settings = config({ rescoreTokens: 1_000_000 });
+      await new ContextPruner({ config: settings, scorer, stateStore: store }).prune(
+        twoToolRequest,
+        { sessionId: "s" },
+      );
+
+      const after = await new ContextPruner({
+        config: settings,
+        scorer,
+        stateStore: store,
+      }).prune(twoToolRequest, { sessionId: "s" });
+
+      expect(after.evaluated).toBe(0);
+      expect(observed.batches).toHaveLength(1);
+    });
+
+    test("counts only pairs dropped by this request", async () => {
+      const pruner = new ContextPruner({
+        config: config(),
+        scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+      });
+
+      const first = await pruner.prune(twoToolRequest);
+      const midTask = clone(twoToolRequest);
+      midTask.messages.pop();
+      const reapplied = await pruner.prune(midTask);
+
+      expect(first.dropped).toBe(1);
+      expect(allToolUseIds(reapplied.request)).toEqual(["call-new"]);
+      expect(reapplied.dropped).toBe(0);
+    });
+
     test("keeps working when the state cannot be saved", async () => {
       const warnings: string[] = [];
       const pruner = new ContextPruner({
@@ -977,6 +1013,7 @@ describe("ContextPruner", () => {
           keeps: [],
           rewrites: [],
           lastFullScoreTokens: [],
+          lastScoredGoals: [],
           seenSessions: ["seen-before-restart"],
         }),
         save: () => undefined,

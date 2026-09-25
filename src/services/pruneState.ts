@@ -14,6 +14,7 @@ export interface PruneStateSnapshot {
   keeps: string[];
   rewrites: Array<[string, Rewrite]>;
   lastFullScoreTokens: Array<[string, number]>;
+  lastScoredGoals: Array<[string, string]>;
   seenSessions: string[];
 }
 
@@ -38,6 +39,16 @@ function tokenEntries(value: unknown): Array<[string, number]> {
       typeof entry[0] === "string" &&
       typeof entry[1] === "number" &&
       Number.isFinite(entry[1]),
+  );
+}
+
+function goalEntries(value: unknown): Array<[string, string]> {
+  if (!Array.isArray(value)) return [];
+  return value.filter(
+    (entry): entry is [string, string] =>
+      Array.isArray(entry) &&
+      typeof entry[0] === "string" &&
+      typeof entry[1] === "string",
   );
 }
 
@@ -68,6 +79,7 @@ export function createFileStateStore(path: string): PruneStateStore {
         keeps: stringArray(saved.keeps),
         rewrites: rewriteEntries(saved.rewrites),
         lastFullScoreTokens: tokenEntries(saved.lastFullScoreTokens),
+        lastScoredGoals: goalEntries(saved.lastScoredGoals),
         seenSessions: stringArray(saved.seenSessions),
       };
     },

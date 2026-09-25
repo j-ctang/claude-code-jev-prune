@@ -22,6 +22,7 @@ test("saves and loads a snapshot with owner-only permissions", async () => {
       ["trim-a", { kind: "trim", keepTokens: 2_000 }],
     ] as Array<[string, Rewrite]>,
     lastFullScoreTokens: [["session-a", 95_000]] as Array<[string, number]>,
+    lastScoredGoals: [["session-a", "Fix auth."]] as Array<[string, string]>,
     seenSessions: ["session-a"],
   };
 
@@ -42,6 +43,7 @@ test("ignores missing, corrupt, and unknown-version state files", async () => {
     keeps: [],
     rewrites: [],
     lastFullScoreTokens: [],
+    lastScoredGoals: [],
     seenSessions: [],
   });
   await writeFile(path, "{not json");

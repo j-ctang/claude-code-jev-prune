@@ -46,10 +46,16 @@ function skipped(
   request: AnthropicRequest,
   beforeTokens: number,
   afterTokens: number,
-  dropped: number,
   reason: SkipReason,
 ): PruneResult {
-  return { request, beforeTokens, afterTokens, evaluated: 0, dropped, reason };
+  return {
+    request,
+    beforeTokens,
+    afterTokens,
+    evaluated: 0,
+    dropped: 0,
+    reason,
+  };
 }
 
 /**
@@ -81,7 +87,7 @@ export class ContextPruner {
   ): Promise<PruneResult> {
     const beforeTokens = estimateTokens(request);
     if (!this.config.pruningEnabled) {
-      return skipped(request, beforeTokens, beforeTokens, 0, "disabled");
+      return skipped(request, beforeTokens, beforeTokens, "disabled");
     }
     const { sessionId } = options;
     const turn = readTurn(request);
@@ -101,12 +107,11 @@ export class ContextPruner {
     // must still be re-applied, or the pruned output would come back.
     if (!manual && this.memory.isEmpty && beforeTokens < threshold) {
       return belowThreshold(
-        skipped(request, beforeTokens, beforeTokens, 0, "below-threshold"),
+        skipped(request, beforeTokens, beforeTokens, "below-threshold"),
       );
     }
 
     let current = request;
-    let dropped = new Set<string>();
     let newRewrites = false;
     try {
       const candidates = extractCandidates(request);
@@ -115,7 +120,6 @@ export class ContextPruner {
           request,
           beforeTokens,
           beforeTokens,
-          0,
           manual || beforeTokens >= threshold
             ? "no-candidates"
             : "below-threshold",
@@ -131,32 +135,18 @@ export class ContextPruner {
           !this.config.excludeTools.has(candidate.toolName) &&
           !loadsToolDefinitions(candidate.result),
       );
-      const saved = this.memory.recall(allowed);
-      dropped = saved.dropped;
-      const rewrites = saved.rewrites;
+      const { dropped, rewrites } = this.memory.recall(allowed);
       current = applyDecisions(request, dropped, rewrites);
       const cachedTokens = estimateTokens(current);
       if (!manual && cachedTokens < threshold) {
         return belowThreshold(
-          skipped(
-            current,
-            beforeTokens,
-            cachedTokens,
-            dropped.size,
-            "below-threshold",
-          ),
+          skipped(current, beforeTokens, cachedTokens, "below-threshold"),
         );
       }
       // Pruning mid-task would cut context the agent is actively using, so new
       // decisions only happen when the user starts a new turn.
       if (!turn.newUserTurn) {
-        return skipped(
-          current,
-          beforeTokens,
-          cachedTokens,
-          dropped.size,
-          "mid-task",
-        );
+        return skipped(current, beforeTokens, cachedTokens, "mid-task");
       }
 
       // Cheap mechanical rewrites run before Jev: superseded outputs become a
@@ -243,7 +233,6 @@ export class ContextPruner {
           current,
           beforeTokens,
           cachedTokens,
-          dropped.size,
           "no-candidates",
         );
         return eligible.length === 0
@@ -274,7 +263,7 @@ export class ContextPruner {
         beforeTokens,
         afterTokens,
         evaluated: toScore.length,
-        dropped: dropped.size,
+        dropped: newlyDropped.length,
         removedTokens: Math.max(0, cachedTokens - afterTokens),
         superseded: newStubs.size,
         trimmed,
@@ -290,7 +279,7 @@ export class ContextPruner {
         beforeTokens,
         afterTokens: estimateTokens(current),
         evaluated: 0,
-        dropped: dropped.size,
+        dropped: 0,
         reason: "fail-open",
         failureReason: loggableReason(error),
       };
