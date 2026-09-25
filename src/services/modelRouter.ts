@@ -103,6 +103,10 @@ export class ModelRouter {
     if (state.unavailable)
       return this.decision(conversation, state, commandNotice);
 
+    // A skipped routing question expires once the user sends anything else.
+    if (turn.newUserTurn && turn.command !== "jev-route-auto") {
+      state.askedHard = false;
+    }
     if (turn.command === "jev-route-auto" && state.askedHard) {
       state.askedHard = false;
       this.switchTo(state, conversation, this.config.routeHardModel, "opt-in");

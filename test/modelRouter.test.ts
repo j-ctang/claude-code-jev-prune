@@ -238,6 +238,23 @@ describe("ModelRouter in ask mode", () => {
     expect(new RouteMode(path).choice).toBe("auto");
   });
 
+  test("a skipped question does not resume on a later /jev-route-auto", async () => {
+    const { router: subject } = await router(
+      scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.1, continues: 0 }),
+    );
+
+    await subject.route(turn(["Redesign auth"]), "s");
+    await subject.route(turn(["Redesign auth", "Fix a typo"]), "s");
+    const later = await subject.route(
+      turn(["Redesign auth", "Fix a typo", command("jev-route-auto")]),
+      "s",
+    );
+
+    expect(later.model).toBeUndefined();
+    expect(later.notice).toContain("Automatic model routing is on");
+    expect(later.notice).not.toContain("continue their previous request");
+  });
+
   test("/jev-route-auto with nothing pending only saves the choice", async () => {
     const { router: subject } = await router(scriptedAsker());
 
