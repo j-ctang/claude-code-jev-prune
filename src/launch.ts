@@ -1,10 +1,10 @@
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { resolve } from "node:path";
-import { loadConfig, withoutCredentials } from "./config.js";
-import { loadInstallEnv, localProxy } from "./checkout.js";
+import { loadConfig, parsePort, withoutCredentials } from "./config.js";
+import { loadInstallEnv, localProxyClient } from "./checkout.js";
 import { sessionsDirectory } from "./installation.js";
-import { formatTokens, ProxyClient } from "./proxyClient.js";
+import { formatTokens } from "./proxyClient.js";
 import {
   liveSessions,
   registerSession,
@@ -27,7 +27,7 @@ async function main(): Promise<void> {
   if (!statSync(project).isDirectory())
     throw new Error(`${project} is not a directory`);
 
-  const proxy = new ProxyClient(loadConfig(process.env).port, localProxy);
+  const proxy = localProxyClient(parsePort(process.env));
   const existingBase = process.env.ANTHROPIC_BASE_URL?.replace(/\/+$/, "");
   if (
     existingBase &&

@@ -3,7 +3,7 @@ import { statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadEnv } from "dotenv";
-import type { ProxyClientDependencies } from "./proxyClient.js";
+import { ProxyClient, type ProxyClientDependencies } from "./proxyClient.js";
 
 /** The Jev Prune checkout; compiled files live one level down in dist/. */
 export const repository = dirname(dirname(fileURLToPath(import.meta.url)));
@@ -16,10 +16,7 @@ export function loadInstallEnv(): void {
 }
 
 /** Starts and inspects the proxy built in this checkout. */
-export const localProxy: Pick<
-  ProxyClientDependencies,
-  "startProcess" | "builtAt"
-> = {
+const localProxy: Pick<ProxyClientDependencies, "startProcess" | "builtAt"> = {
   startProcess() {
     // Detached so the proxy outlives this launcher while other terminals use it.
     const proxy = spawn(
@@ -47,3 +44,8 @@ export const localProxy: Pick<
     }
   },
 };
+
+/** A client for the proxy on `port`, able to start this checkout's build. */
+export function localProxyClient(port: number): ProxyClient {
+  return new ProxyClient(port, localProxy);
+}

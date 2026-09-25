@@ -25,17 +25,14 @@ export class ProxyClient {
 
   constructor(
     readonly port: number,
-    dependencies: Partial<ProxyClientDependencies> = {},
+    dependencies: Pick<ProxyClientDependencies, "startProcess" | "builtAt"> &
+      Partial<ProxyClientDependencies>,
   ) {
     this.baseUrl = `http://127.0.0.1:${port}`;
     this.dependencies = {
       fetch: globalThis.fetch,
-      startProcess: () => {
-        throw new Error("This ProxyClient cannot start a proxy");
-      },
       sleep: (milliseconds) =>
         new Promise((done) => setTimeout(done, milliseconds)),
-      builtAt: () => undefined,
       ...dependencies,
     };
   }

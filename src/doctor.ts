@@ -2,14 +2,18 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { DEFAULT_PORT, loadConfig, parsePort, type Config } from "./config.js";
-import { envPath, loadInstallEnv, repository } from "./checkout.js";
+import {
+  envPath,
+  loadInstallEnv,
+  localProxyClient,
+  repository,
+} from "./checkout.js";
 import {
   claudeSettingsPath,
   commandsDirectory,
   logPath,
   slashCommands,
 } from "./installation.js";
-import { ProxyClient } from "./proxyClient.js";
 
 interface Check {
   ok: boolean | "warn";
@@ -97,7 +101,7 @@ async function main(): Promise<void> {
     // The settings check above already reports a bad PORT.
   }
   try {
-    const health = await new ProxyClient(port).probe();
+    const health = await localProxyClient(port).probe();
     checks.push({
       ok: true,
       label: health

@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
 import { parsePort } from "./config.js";
-import { loadInstallEnv } from "./checkout.js";
+import { loadInstallEnv, localProxyClient } from "./checkout.js";
 import { logPath } from "./installation.js";
 import { summarizeLog } from "./logSummary.js";
-import { formatTokens, ProxyClient } from "./proxyClient.js";
+import { formatTokens } from "./proxyClient.js";
 
 async function main(): Promise<void> {
   loadInstallEnv();
-  const proxy = new ProxyClient(parsePort(process.env));
+  const proxy = localProxyClient(parsePort(process.env));
   let raw = "";
   try {
     raw = readFileSync(logPath, "utf8");

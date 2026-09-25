@@ -1,5 +1,10 @@
 import { ProxyClient } from "../src/proxyClient.js";
 
+const noProcess = {
+  startProcess: () => ({ exited: () => true }),
+  builtAt: () => undefined,
+};
+
 const healthy = { status: "ok", proxy_version: "1.0.0", pid: 42 };
 
 /** A fake network where the proxy answers once `up` is true. */
@@ -16,6 +21,7 @@ describe("ProxyClient", () => {
   test("reuses a running proxy without starting another", async () => {
     const { state, fetch } = fakeProxy({ up: true });
     const client = new ProxyClient(5590, {
+      ...noProcess,
       fetch,
       startProcess: () => {
         state.starts += 1;
@@ -31,6 +37,7 @@ describe("ProxyClient", () => {
     const { state, fetch } = fakeProxy({ up: false });
     let waits = 0;
     const client = new ProxyClient(5590, {
+      ...noProcess,
       fetch,
       startProcess: () => {
         state.starts += 1;
@@ -51,6 +58,7 @@ describe("ProxyClient", () => {
     const { fetch } = fakeProxy({ up: false });
     let exited = false;
     const client = new ProxyClient(5590, {
+      ...noProcess,
       fetch,
       startProcess: () => ({ exited: () => exited }),
       sleep: async () => {
@@ -63,7 +71,7 @@ describe("ProxyClient", () => {
 
   test("reports another program on the port", async () => {
     const { fetch } = fakeProxy({ up: true, body: { hello: "world" } });
-    const client = new ProxyClient(5590, { fetch });
+    const client = new ProxyClient(5590, { ...noProcess, fetch });
 
     await expect(client.probe()).rejects.toThrow(
       "Port 5590 is used by another program",
@@ -72,6 +80,7 @@ describe("ProxyClient", () => {
 
   test("flags a proxy started before the last build", () => {
     const client = new ProxyClient(5590, {
+      ...noProcess,
       builtAt: () => Date.parse("2026-09-24T12:00:00Z"),
     });
 

@@ -12,7 +12,7 @@ export type PruneTrigger = "manual" | "canary";
 
 const TRIGGER_LABELS: Record<PruneTrigger, string> = {
   manual: "Manual prune: pruned",
-  canary: "Pruned after missed response prefixes: pruned",
+  canary: "Response prefix missed twice, so pruned",
 };
 
 export interface PruneCounts {

@@ -1123,7 +1123,7 @@ describe("ContextPruner", () => {
       const result = await pruner.prune(twoToolRequest, { trigger: "canary" });
 
       expect(result.reason).toBe("pruned");
-      expect(result.notice).toMatch(/after missed response prefixes: pruned 1/);
+      expect(result.notice).toMatch(/prefix missed twice, so pruned 1/);
     });
 
     test("tells the user when nothing is eligible", async () => {
