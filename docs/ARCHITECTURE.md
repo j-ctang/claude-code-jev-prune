@@ -20,7 +20,7 @@ Express application
        │    ├── apply protection policy
        │    ├── score candidates with Jev
        │    ├── remove selected pairs
-       │    ├── route model
+       │    └── route model
        └── forward to ANTHROPIC_UPSTREAM_URL
                     │
                     ▼
