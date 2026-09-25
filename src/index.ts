@@ -4,7 +4,9 @@ import { createApp } from "./app.js";
 import { loadConfig, type Config } from "./config.js";
 import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
+import { ModelRouter } from "./services/modelRouter.js";
 import { createFileStateStore } from "./services/pruneState.js";
+import { RouteMode, routeModePath } from "./services/routeMode.js";
 import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
 
@@ -27,6 +29,15 @@ function start(
     logger,
     stateStore: createFileStateStore(config.statePath),
   });
+  // Routing needs Jev; without a key every request keeps its model.
+  const router = config.jevApiKey
+    ? new ModelRouter(
+        config,
+        scorer,
+        new RouteMode(routeModePath(config.statePath)),
+        logger,
+      )
+    : undefined;
   const upstreamAbort = new AbortController();
   const app = createApp({
     config,
@@ -35,6 +46,7 @@ function start(
     logger,
     startedAt: Date.now(),
     upstreamSignal: upstreamAbort.signal,
+    ...(router ? { router } : {}),
   });
   const server = createServer(app);
   let shuttingDown = false;

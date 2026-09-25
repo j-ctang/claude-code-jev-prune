@@ -18,6 +18,7 @@ interface AppDependencies {
   stats?: ProxyStats;
   version?: string;
   upstreamSignal?: AbortSignal;
+  router?: ProxyDependencies["router"];
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -50,6 +51,7 @@ export function createApp(dependencies: AppDependencies): Express {
       fetchFn: dependencies.fetchFn,
       logger: dependencies.logger,
       stats,
+      ...(dependencies.router ? { router: dependencies.router } : {}),
       ...(dependencies.upstreamSignal
         ? { upstreamSignal: dependencies.upstreamSignal }
         : {}),

@@ -9,6 +9,7 @@ import request from "supertest";
 import type { Config } from "../src/config.js";
 import { createApp } from "../src/app.js";
 import { PruneError } from "../src/errors.js";
+import type { RequestRouter } from "../src/middleware/proxy.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import type {
   AnthropicRequest,
@@ -128,6 +129,48 @@ function appFor(
     startedAt: Date.now() - 42_000,
   });
 }
+
+function appWithRouter(upstreamUrl: string, router: RequestRouter) {
+  const config = testConfig(upstreamUrl, {
+    pruneThreshold: 1_000_000,
+    notify: true,
+  });
+  const pruner = new ContextPruner({
+    config,
+    scorer: {
+      async score() {
+        return new Map();
+      },
+    },
+  });
+  return createApp({
+    config,
+    pruner,
+    fetchFn: fetch,
+    logger: silentLogger,
+    startedAt: Date.now(),
+    router,
+  });
+}
+
+const hardRouter = (unavailable: string[] = []): RequestRouter => ({
+  async route() {
+    return {
+      conversation: "s:abc",
+      model: "claude-fable-5-1",
+      notice: "[jev-prune] Switched.",
+    };
+  },
+  markUnavailable(conversation) {
+    unavailable.push(conversation);
+    return "[jev-prune] Not available.";
+  },
+});
+
+const routedRequest: AnthropicRequest = {
+  model: "claude-opus-5-5",
+  messages: [{ role: "user", content: "Redesign auth" }],
+};
 
 afterEach(async () => {
   await Promise.all(openUpstreams.splice(0).map((upstream) => upstream.close()));
@@ -661,6 +704,86 @@ describe("Anthropic proxy", () => {
 
     expect(response.status).toBe(400);
     expect(upstream.requests).toHaveLength(0);
+  });
+  test("sends the routed model and the router's notice", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+
+    await request(appWithRouter(upstream.url, hardRouter()))
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    const sent = upstream.requests[0]?.body as AnthropicRequest;
+    expect(sent.model).toBe("claude-fable-5-1");
+    expect(JSON.stringify(sent.messages.at(-1))).toContain(
+      "[jev-prune] Switched.",
+    );
+  });
+
+  test("resends on the original model when the routed model is rejected", async () => {
+    const upstream = await startUpstream((incoming, response) => {
+      const model = (incoming.body as AnthropicRequest).model;
+      response.writeHead(model === "claude-fable-5-1" ? 404 : 200, {
+        "content-type": "application/json",
+      });
+      response.end(JSON.stringify({ model }));
+    });
+    const unavailable: string[] = [];
+
+    const response = await request(
+      appWithRouter(upstream.url, hardRouter(unavailable)),
+    )
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ model: "claude-opus-5-5" });
+    expect(upstream.requests).toHaveLength(2);
+    const retried = upstream.requests[1]?.body as AnthropicRequest;
+    expect(retried.model).toBe("claude-opus-5-5");
+    expect(JSON.stringify(retried.messages.at(-1))).toContain(
+      "[jev-prune] Not available.",
+    );
+    expect(JSON.stringify(retried.messages.at(-1))).not.toContain(
+      "[jev-prune] Switched.",
+    );
+    expect(unavailable).toEqual(["s:abc"]);
+  });
+
+  test("returns the retry's error unchanged when the default model also fails", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "prompt is too long" }));
+    });
+
+    const response = await request(appWithRouter(upstream.url, hardRouter()))
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: "prompt is too long" });
+    expect(upstream.requests).toHaveLength(2);
+  });
+
+  test("does not retry a rejected request that was not routed", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const router: RequestRouter = {
+      async route() {
+        return { conversation: "s:abc" };
+      },
+      markUnavailable: () => "",
+    };
+
+    await request(appWithRouter(upstream.url, router))
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(upstream.requests).toHaveLength(1);
   });
 });
 
