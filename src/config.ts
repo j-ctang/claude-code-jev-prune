@@ -3,6 +3,32 @@ import { join } from "node:path";
 
 export const DEFAULT_PORT = 5590;
 
+/** The key `.env.example` ships with; it is treated as no key at all. */
+export const PLACEHOLDER_KEY = "tsf_replace_with_your_key";
+
+export const defaultStatePath = join(
+  homedir(),
+  ".claude",
+  "jev-prune-state.json",
+);
+
+export function hasRealKey(key: string | undefined): key is string {
+  return Boolean(key?.trim()) && key !== PLACEHOLDER_KEY;
+}
+
+/** A URL safe to show: any user name or password in it is removed. */
+export function withoutCredentials(url: string): string {
+  const parsed = new URL(url);
+  parsed.username = "";
+  parsed.password = "";
+  return parsed.toString().replace(/\/$/, "");
+}
+
+/** The proxy port, validated without needing the rest of the settings. */
+export function parsePort(env: NodeJS.ProcessEnv): number {
+  return parseInteger(env.PORT ?? String(DEFAULT_PORT), "PORT", 1, 65_535);
+}
+
 export interface Config {
   port: number;
   pruningEnabled: boolean;
@@ -113,12 +139,15 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       "JEV_PRUNE_TRIM_KEEP_TOKENS must be less than half of JEV_PRUNE_TRIM_MIN_TOKENS",
     );
   }
-  if (pruningEnabled && !env.TYPESAFE_API_KEY) {
+  const jevApiKey = hasRealKey(env.TYPESAFE_API_KEY)
+    ? env.TYPESAFE_API_KEY
+    : undefined;
+  if (pruningEnabled && !jevApiKey) {
     throw new Error("TYPESAFE_API_KEY is required when pruning is enabled");
   }
 
   return {
-    port: parseInteger(env.PORT ?? String(DEFAULT_PORT), "PORT", 1, 65_535),
+    port: parsePort(env),
     pruningEnabled,
     pruneThreshold,
     triggerTokens,
@@ -133,9 +162,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       "JEV_PRUNE_RESUME_NOTICE_TOKENS",
       0,
     ),
-    statePath:
-      env.JEV_PRUNE_STATE_PATH ||
-      join(homedir(), ".claude", "jev-prune-state.json"),
+    statePath: env.JEV_PRUNE_STATE_PATH || defaultStatePath,
     supersede: parseBoolean(
       env.JEV_PRUNE_SUPERSEDE ?? "true",
       "JEV_PRUNE_SUPERSEDE",
@@ -165,7 +192,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
         .filter(Boolean),
     ),
     debug: parseBoolean(env.JEV_PRUNE_DEBUG ?? "false", "JEV_PRUNE_DEBUG"),
-    ...(env.TYPESAFE_API_KEY ? { jevApiKey: env.TYPESAFE_API_KEY } : {}),
+    ...(jevApiKey ? { jevApiKey } : {}),
     jevBaseUrl: parseUrl(
       env.TYPESAFE_BASE_URL ?? "https://api.typesafe.ai",
       "TYPESAFE_BASE_URL",

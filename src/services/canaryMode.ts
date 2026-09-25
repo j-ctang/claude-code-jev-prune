@@ -7,6 +7,11 @@ import {
 } from "node:fs";
 import { dirname } from "node:path";
 
+/** Where the canary choice is saved, next to the pruning state. */
+export function canaryModePath(statePath: string): string {
+  return `${statePath}.canary-mode.json`;
+}
+
 /** The user's persistent choice to prune automatically on canary misses. */
 export class CanaryMode {
   /** `autoPrune` is the default until the user saves a choice. */

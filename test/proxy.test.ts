@@ -631,6 +631,7 @@ describe("Anthropic proxy", () => {
       pid: process.pid,
       jev_configured: true,
       pruning_enabled: true,
+      upstream: upstream.url,
       requests: 7,
       pruning_decisions: 3,
       dropped_pairs: 2,

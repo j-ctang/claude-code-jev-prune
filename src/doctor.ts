@@ -1,11 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
-import { config as loadEnv } from "dotenv";
-import { DEFAULT_PORT, loadConfig, type Config } from "./config.js";
-import { logPath, repository, slashCommands } from "./paths.js";
-import { probe } from "./proxyHealth.js";
+import { DEFAULT_PORT, loadConfig, parsePort, type Config } from "./config.js";
+import { envPath, loadInstallEnv, repository } from "./checkout.js";
+import {
+  claudeSettingsPath,
+  commandsDirectory,
+  logPath,
+  slashCommands,
+} from "./installation.js";
+import { ProxyClient } from "./proxyClient.js";
 
 interface Check {
   ok: boolean | "warn";
@@ -15,9 +19,9 @@ interface Check {
 
 function claudeSettingsEnv(): Record<string, unknown> {
   try {
-    const settings = JSON.parse(
-      readFileSync(join(homedir(), ".claude", "settings.json"), "utf8"),
-    ) as { env?: Record<string, unknown> };
+    const settings = JSON.parse(readFileSync(claudeSettingsPath, "utf8")) as {
+      env?: Record<string, unknown>;
+    };
     return settings.env ?? {};
   } catch {
     return {};
@@ -34,7 +38,7 @@ async function reachable(url: string): Promise<boolean> {
 }
 
 async function main(): Promise<void> {
-  loadEnv({ path: join(repository, ".env"), quiet: true });
+  loadInstallEnv();
   const checks: Check[] = [];
 
   const major = Number(process.versions.node.split(".")[0]);
@@ -63,7 +67,7 @@ async function main(): Promise<void> {
     checks.push({
       ok: false,
       label: error instanceof Error ? error.message : "Settings are invalid",
-      fix: existsSync(join(repository, ".env"))
+      fix: existsSync(envPath)
         ? "Fix the value in .env, or run jev-prune --setup."
         : "Run jev-prune to finish setup.",
     });
@@ -86,9 +90,14 @@ async function main(): Promise<void> {
     });
   }
 
-  const port = config?.port ?? DEFAULT_PORT;
+  let port = DEFAULT_PORT;
   try {
-    const health = await probe(`http://127.0.0.1:${port}`);
+    port = parsePort(process.env);
+  } catch {
+    // The settings check above already reports a bad PORT.
+  }
+  try {
+    const health = await new ProxyClient(port).probe();
     checks.push({
       ok: true,
       label: health
@@ -103,9 +112,8 @@ async function main(): Promise<void> {
     });
   }
 
-  const commands = join(homedir(), ".claude", "commands");
   const stale = slashCommands.filter((name) => {
-    const installed = join(commands, name);
+    const installed = join(commandsDirectory, name);
     return (
       !existsSync(installed) ||
       readFileSync(installed, "utf8") !==

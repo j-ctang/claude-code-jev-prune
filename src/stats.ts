@@ -1,13 +1,13 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { config as loadEnv } from "dotenv";
+import { parsePort } from "./config.js";
+import { loadInstallEnv } from "./checkout.js";
+import { logPath } from "./installation.js";
 import { summarizeLog } from "./logSummary.js";
-import { formatTokens, probe } from "./proxyHealth.js";
-import { DEFAULT_PORT } from "./config.js";
-import { logPath, repository } from "./paths.js";
+import { formatTokens, ProxyClient } from "./proxyClient.js";
 
 async function main(): Promise<void> {
-  loadEnv({ path: join(repository, ".env"), quiet: true });
+  loadInstallEnv();
+  const proxy = new ProxyClient(parsePort(process.env));
   let raw = "";
   try {
     raw = readFileSync(logPath, "utf8");
@@ -24,15 +24,19 @@ async function main(): Promise<void> {
     lines.push(
       `${summary.failOpens} request${summary.failOpens === 1 ? "" : "s"} went through unpruned because TypeSafe did not answer.`,
     );
-  const port = process.env.PORT ?? String(DEFAULT_PORT);
-  const live = await probe(`http://127.0.0.1:${port}`).catch(() => undefined);
+  const live = await proxy.probe().catch(() => undefined);
   lines.push(
     live
-      ? `Proxy running on port ${port}: ${live.prunes ?? 0} prunes, about ${formatTokens(live.tokens_removed ?? 0)} tokens removed since it started.`
+      ? `Proxy running on port ${proxy.port}: ${live.prunes ?? 0} prunes, about ${formatTokens(live.tokens_removed ?? 0)} tokens removed since it started.`
       : "Proxy not running.",
   );
   lines.push(`Log: ${logPath}`);
   process.stdout.write(`${lines.join("\n")}\n`);
 }
 
-void main();
+void main().catch((error: unknown) => {
+  process.stderr.write(
+    `${error instanceof Error ? error.message : "Stats failed"}\n`,
+  );
+  process.exitCode = 1;
+});

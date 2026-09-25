@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { AnthropicRequest } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
-import { CanaryMode } from "./canaryMode.js";
+import { CanaryMode, canaryModePath } from "./canaryMode.js";
 import { readTurn, type Turn } from "./turn.js";
 
 interface CanaryState {
@@ -60,7 +60,7 @@ export class CanaryPolicy {
   ) {
     this.monitor = new CanaryMonitor(config.canaryPrefix ?? "");
     this.mode = new CanaryMode(
-      `${config.statePath}.canary-mode.json`,
+      canaryModePath(config.statePath),
       config.canaryAction === "prune",
     );
   }
