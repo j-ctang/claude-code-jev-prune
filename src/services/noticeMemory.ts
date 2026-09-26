@@ -11,6 +11,7 @@ interface Noticed {
 }
 
 const MAX_CONVERSATIONS = 500;
+const MAX_ENTRIES = 200;
 
 /**
  * Claude Code moves cache_control between requests and may send text as a
@@ -40,7 +41,10 @@ function fingerprint(message: Message): string {
 export class NoticeMemory {
   private readonly conversations = new Map<string, readonly Noticed[]>();
 
-  constructor(private readonly maxConversations = MAX_CONVERSATIONS) {}
+  constructor(
+    private readonly maxConversations = MAX_CONVERSATIONS,
+    private readonly maxEntries = MAX_ENTRIES,
+  ) {}
 
   /**
    * Returns `request` with earlier notices back in place and `notices` added
@@ -52,27 +56,26 @@ export class NoticeMemory {
     request: AnthropicRequest,
     notices: readonly string[],
   ): AnthropicRequest {
-    const saved = (this.conversations.get(conversation) ?? []).filter(
-      (entry) => {
-        const message = request.messages[entry.index];
-        return (
-          message !== undefined && fingerprint(message) === entry.fingerprint
-        );
-      },
-    );
+    // Entries that don't match are kept: a side request or rewound history
+    // shares the conversation, and the thread may come back to them.
+    let entries = this.conversations.get(conversation) ?? [];
     const index = lastTurnIndex(request);
     const current = request.messages[index];
-    const entries =
-      current && notices.length > 0
-        ? [
-            ...saved.filter((entry) => entry.index !== index),
-            { index, fingerprint: fingerprint(current), notices },
-          ]
-        : saved;
+    if (current && notices.length > 0) {
+      const print = fingerprint(current);
+      entries = [
+        ...entries.filter(
+          (entry) => entry.index !== index || entry.fingerprint !== print,
+        ),
+        { index, fingerprint: print, notices },
+      ].slice(-this.maxEntries);
+    }
     remember(this.conversations, conversation, entries, this.maxConversations);
 
     let noticed = request;
     for (const entry of entries) {
+      const message = request.messages[entry.index];
+      if (!message || fingerprint(message) !== entry.fingerprint) continue;
       for (const notice of entry.notices) {
         noticed = appendNoticeAt(noticed, entry.index, notice);
       }

@@ -24,6 +24,58 @@ describe("NoticeMemory", () => {
     expect(later.messages[2]).toEqual(user("Add tests"));
   });
 
+  test("a side request on the same conversation keeps saved notices", () => {
+    const memory = new NoticeMemory();
+    const first = memory.apply("s:main", request(user("Redesign auth")), [
+      "[jev-prune] Pruned.",
+    ]);
+    memory.apply("s:main", request(user("<session>title</session>")), []);
+    const later = memory.apply(
+      "s:main",
+      request(user("Redesign auth"), reply("Done."), user("Add tests")),
+      [],
+    );
+
+    expect(later.messages[0]).toEqual(first.messages[0]);
+  });
+
+  test("a rewound history keeps notices for when it comes back", () => {
+    const memory = new NoticeMemory();
+    memory.apply("s:main", request(user("A"), reply("ok"), user("B")), [
+      "[jev-prune] Pruned.",
+    ]);
+    const rewound = memory.apply(
+      "s:main",
+      request(user("A"), reply("ok"), user("C")),
+      [],
+    );
+    const back = memory.apply(
+      "s:main",
+      request(user("A"), reply("ok"), user("B"), reply("done"), user("D")),
+      [],
+    );
+
+    expect(JSON.stringify(rewound.messages)).not.toContain("Pruned");
+    expect(JSON.stringify(back.messages[2])).toContain("Pruned");
+  });
+
+  test("keeps only the newest entries of a long conversation", () => {
+    const memory = new NoticeMemory(500, 2);
+    const history: Message[] = [];
+    for (const text of ["A", "B", "C"]) {
+      history.push(user(text));
+      memory.apply("s:main", request(...history), [`notice ${text}`]);
+      history.push(reply("ok"));
+    }
+    const later = JSON.stringify(
+      memory.apply("s:main", request(...history, user("D")), []).messages,
+    );
+
+    expect(later).not.toContain("notice A");
+    expect(later).toContain("notice B");
+    expect(later).toContain("notice C");
+  });
+
   test("keeps each turn's notices in order beside new ones", () => {
     const memory = new NoticeMemory();
     memory.apply("s:main", request(user("A")), ["one", "two"]);
