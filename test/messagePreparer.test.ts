@@ -101,7 +101,7 @@ test("confirms a rejection only when the resend succeeds", async () => {
       return {
         model: "claude-fable-5-1",
         fallback: {
-          retries: (status) => status === 400,
+          retries: ({ status }) => status === 400,
           notice: "[jev-prune] Rejected.",
           confirm: () => confirmed.push(1),
         },

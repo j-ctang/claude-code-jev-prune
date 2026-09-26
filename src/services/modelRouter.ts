@@ -19,13 +19,16 @@ export interface RouteDecision {
   fallback?: RouteFallback;
 }
 
+/** The upstream response that refused the routed model. */
+export type Rejection = Pick<globalThis.Response, "status" | "headers">;
+
 export interface RouteFallback {
-  /** Whether this upstream status means resend on the original model. */
-  retries(status: number): boolean;
+  /** Whether this upstream response means resend on the original model. */
+  retries(rejection: Rejection): boolean;
   /** Text to show Claude on the resend. */
   notice: string;
-  /** The resend succeeded, so the routed model can't take this conversation. */
-  confirm(): void;
+  /** The resend succeeded, so the routed model can't take this request. */
+  confirm(rejection: Rejection): void;
 }
 
 interface CommandResult {
@@ -51,8 +54,18 @@ interface ConversationState {
   askedHard: boolean;
 }
 
-/** Statuses where the routed model may be what the upstream rejected. */
-const RETRY_STATUSES = new Set([400, 403, 404]);
+/**
+ * A 403 or 404 says the account can't use the model at all, as does a 429
+ * the API marks not retryable (a plan without the model's usage credits).
+ * A 400 may come from this conversation alone.
+ */
+function refusesModel({ status, headers }: Rejection): boolean {
+  return (
+    status === 403 ||
+    status === 404 ||
+    (status === 429 && headers.get("x-should-retry") === "false")
+  );
+}
 const MAX_CONVERSATIONS = 500;
 const MAX_REPLY_CHARS = 4_000;
 const CONTINUES_THRESHOLD = 0.5;
@@ -122,6 +135,8 @@ export function nextMove(
  */
 export class ModelRouter {
   private readonly conversations = new Map<string, ConversationState>();
+  /** The account can't use the hard model, so no conversation is routed. */
+  private modelRefused = false;
 
   constructor(
     private readonly config: RouterConfig,
@@ -279,6 +294,7 @@ export class ModelRouter {
         "type" in choice &&
         choice.type === "auto");
     return (
+      !this.modelRefused &&
       request.model === this.config.routeDefaultModel &&
       autoChoice &&
       !isSideRequest(request)
@@ -319,15 +335,20 @@ export class ModelRouter {
   ): RouteFallback {
     const { routeDefaultModel, routeHardModel } = this.config;
     return {
-      retries: (status) => RETRY_STATUSES.has(status),
+      retries: (rejection) =>
+        rejection.status === 400 || refusesModel(rejection),
       notice: `[jev-prune] ${routeHardModel} rejected this request, so this conversation stays on ${routeDefaultModel}. Tell the user in one short line.`,
-      confirm: () => {
+      confirm: (rejection) => {
+        const everywhere = refusesModel(rejection);
         this.logger.warn("route_model_unavailable", {
           conversation,
           model: routeHardModel,
+          status: rejection.status,
+          everywhere,
         });
         state.model = routeDefaultModel;
         state.unavailable = true;
+        if (everywhere) this.modelRefused = true;
       },
     };
   }

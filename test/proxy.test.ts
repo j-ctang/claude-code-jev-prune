@@ -187,7 +187,7 @@ const hardRouter = (confirmed: string[] = []): RequestRouter => ({
       model: "claude-fable-5-1",
       notice: "[jev-prune] Switched.",
       fallback: {
-        retries: (status) => status === 400 || status === 404,
+        retries: ({ status }) => status === 400 || status === 404,
         notice: "[jev-prune] Not available.",
         confirm: () => confirmed.push("s:abc"),
       },

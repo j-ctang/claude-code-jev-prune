@@ -135,14 +135,14 @@ export class MessagePreparer {
       onFinalReply,
       async send(send) {
         const upstream = await sendChanged(send, routed);
-        if (!fallback?.retries(upstream.status)) return upstream;
+        if (!fallback?.retries(upstream)) return upstream;
         await upstream.body?.cancel();
         logger.warn("route_retry", { status: upstream.status });
         const retried = await sendChanged(
           send,
           withNotices(...unrouted, fallback.notice),
         );
-        if (retried.ok) fallback.confirm();
+        if (retried.ok) fallback.confirm(upstream);
         return retried;
       },
     };
