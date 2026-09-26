@@ -1,14 +1,12 @@
 import { spawn } from "node:child_process";
-import { readFileSync, statSync } from "node:fs";
+import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig, parsePort, withoutCredentials } from "./config.js";
 import { loadInstallEnv, localProxyClient } from "./checkout.js";
 import { sessionsDirectory } from "./installation.js";
 import { logPath } from "./installation.js";
-import {
-  createSkillShadowLogCursor,
-  skillShadowNotices,
-} from "./services/skillShadowLog.js";
+import { skillShadowNotices } from "./services/skillShadowLog.js";
+import { createSkillShadowLogFollower } from "./services/skillShadowLogFollower.js";
 import { assertSkillShadowMode, formatTokens } from "./proxyClient.js";
 import {
   liveSessions,
@@ -54,26 +52,11 @@ async function main(): Promise<void> {
   let stopShadowNotices = () => {};
   try {
     if (config.skillShadow) {
-      let offset = 0;
-      try {
-        offset = readFileSync(logPath).length;
-      } catch {
-        /* no log yet */
-      }
       const seen = new Set<string>();
-      const cursor = createSkillShadowLogCursor();
+      const follower = createSkillShadowLogFollower(logPath);
       const poll = () => {
-        let buffer: Buffer;
-        try {
-          buffer = readFileSync(logPath);
-        } catch {
-          return;
-        }
-        if (buffer.length < offset) offset = 0;
-        const chunk = cursor.push(buffer.subarray(offset).toString("utf8"));
-        offset = buffer.length;
         for (const line of skillShadowNotices(
-          chunk,
+          follower.poll(),
           seen,
           !wasShared(sessions) && liveSessions(sessions).length === 1,
         ))

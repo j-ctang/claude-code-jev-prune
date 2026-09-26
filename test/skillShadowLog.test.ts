@@ -1,5 +1,4 @@
 import {
-  createSkillShadowLogCursor,
   skillShadowNotices,
   summarizeSkillShadowLog,
 } from "../src/services/skillShadowLog.js";
@@ -27,8 +26,8 @@ test("summarizes potential tokens separately from actual pruning", () => {
 
 test("prints each finding once only while one launcher owns the proxy", () => {
   const seen = new Set<string>();
-  expect(skillShadowNotices(complete, seen, false)).toEqual([]);
-  expect(skillShadowNotices(complete, seen, true)).toEqual([]);
+  expect(skillShadowNotices([JSON.parse(complete)], seen, false)).toEqual([]);
+  expect(skillShadowNotices([JSON.parse(complete)], seen, true)).toEqual([]);
   const second = JSON.stringify({
     message: "skill_shadow_complete",
     eventId: "event-2",
@@ -37,16 +36,10 @@ test("prints each finding once only while one launcher owns the proxy", () => {
     potentialTokens: 2500,
     confidence: 0.99,
   });
-  expect(skillShadowNotices(second, seen, true)).toEqual([
+  expect(skillShadowNotices([JSON.parse(second)], seen, true)).toEqual([
     'Jev: skill "reports" looks reusable; ~3K potential tokens after this task.',
   ]);
-  expect(skillShadowNotices(second, seen, true)).toEqual([]);
-});
-
-test("waits for a complete log line across polls", () => {
-  const cursor = createSkillShadowLogCursor();
-  expect(cursor.push(complete.slice(0, 20))).toBe("");
-  expect(cursor.push(`${complete.slice(20)}\n`)).toBe(`${complete}\n`);
+  expect(skillShadowNotices([JSON.parse(second)], seen, true)).toEqual([]);
 });
 
 test("does not print control characters from a skill identifier", () => {
@@ -56,5 +49,5 @@ test("does not print control characters from a skill identifier", () => {
     skill: "\u001b[31m",
     potentialTokens: 500,
   });
-  expect(skillShadowNotices(event, new Set(), true)).toEqual([]);
+  expect(skillShadowNotices([JSON.parse(event)], new Set(), true)).toEqual([]);
 });

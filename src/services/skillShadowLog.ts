@@ -1,27 +1,12 @@
 import { formatTokens } from "../proxyClient.js";
 
-interface ShadowEvent {
+export interface ShadowEvent {
   message?: unknown;
   eventId?: unknown;
   sessionId?: unknown;
   skill?: unknown;
   potentialTokens?: unknown;
   confidence?: unknown;
-}
-
-/** Keeps a partial JSONL line until the next file read supplies its newline. */
-export function createSkillShadowLogCursor(): { push(chunk: string): string } {
-  let pending = "";
-  return {
-    push(chunk: string): string {
-      pending += chunk;
-      const end = pending.lastIndexOf("\n");
-      if (end < 0) return "";
-      const complete = pending.slice(0, end + 1);
-      pending = pending.slice(end + 1);
-      return complete;
-    },
-  };
 }
 
 function events(raw: string): ShadowEvent[] {
@@ -72,12 +57,12 @@ export function summarizeSkillShadowLog(raw: string): SkillShadowSummary {
 
 /** Consumes event IDs even when notices are suppressed by shared usage. */
 export function skillShadowNotices(
-  raw: string,
+  parsedEvents: readonly ShadowEvent[],
   seen: Set<string>,
   soleLauncher: boolean,
 ): string[] {
   const lines: string[] = [];
-  for (const event of events(raw)) {
+  for (const event of parsedEvents) {
     if (
       event.message !== "skill_shadow_complete" ||
       typeof event.eventId !== "string" ||
