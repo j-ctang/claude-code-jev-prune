@@ -12,6 +12,7 @@ export function createResponseTextTap(
   let buffered = "";
   let reply = "";
   let stopped = false;
+  let endTurn = false;
   let overflow = false;
 
   const consume = (): void => {
@@ -28,10 +29,16 @@ export function createResponseTextTap(
       try {
         const event = JSON.parse(data) as {
           type?: unknown;
-          delta?: { type?: unknown; text?: unknown };
+          delta?: { type?: unknown; text?: unknown; stop_reason?: unknown };
         };
-        if (event.type === "content_block_delta" && event.delta?.type === "text_delta" && typeof event.delta.text === "string") {
+        if (
+          event.type === "content_block_delta" &&
+          event.delta?.type === "text_delta" &&
+          typeof event.delta.text === "string"
+        ) {
           reply += event.delta.text;
+        } else if (event.type === "message_delta") {
+          endTurn = event.delta?.stop_reason === "end_turn";
         } else if (event.type === "message_stop") {
           stopped = true;
         }
@@ -46,7 +53,9 @@ export function createResponseTextTap(
   return new Transform({
     transform(chunk: Buffer, _encoding, callback: TransformCallback) {
       if (!overflow) {
-        buffered += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, "\n");
+        buffered += decoder
+          .decode(chunk, { stream: true })
+          .replace(/\r\n/g, "\n");
         if (buffered.length > MAX_BYTES) overflow = true;
         else if (stream) consume();
       }
@@ -56,7 +65,7 @@ export function createResponseTextTap(
       if (!overflow) {
         if (stream) {
           consume();
-          if (stopped && reply.trim()) onFinal(reply);
+          if (stopped && endTurn && reply.trim()) onFinal(reply);
         } else {
           try {
             const value = JSON.parse(buffered) as {
@@ -65,7 +74,10 @@ export function createResponseTextTap(
             };
             if (value.stop_reason === "end_turn") {
               const text = value.content
-                ?.filter((block) => block.type === "text" && typeof block.text === "string")
+                ?.filter(
+                  (block) =>
+                    block.type === "text" && typeof block.text === "string",
+                )
                 .map((block) => block.text)
                 .join("\n");
               if (text?.trim()) onFinal(text);

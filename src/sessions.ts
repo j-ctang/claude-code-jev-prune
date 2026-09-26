@@ -1,11 +1,21 @@
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 
 /**
  * Tracks which launcher processes share one proxy. The last launcher to exit
  * stops the proxy, so a second terminal never loses its proxy early.
  */
-export function registerSession(directory: string, pid: number, project = ""): void {
+export function registerSession(
+  directory: string,
+  pid: number,
+  project = "",
+): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   writeFileSync(join(directory, String(pid)), project, { mode: 0o600 });
 }

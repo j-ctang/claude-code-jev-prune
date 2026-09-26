@@ -127,6 +127,7 @@ async function forward(
   dependencies.stats.requests += 1;
   let body = request.body as unknown;
   let shadowSessionId: string | undefined;
+  let shadowRevision: number | undefined;
   const path = request.originalUrl.split("?", 1)[0];
 
   if (
@@ -136,21 +137,25 @@ async function forward(
   ) {
     const startedAt = Date.now();
     const sessionId = request.get(SESSION_HEADER);
+    const canary = canaryPolicy.check(body, sessionId);
+    const result = await dependencies.pruner.prune(body, {
+      ...(sessionId ? { sessionId } : {}),
+      ...(canary.prune ? { trigger: "canary" as const } : {}),
+    });
     if (dependencies.config.skillShadow && dependencies.shadow && sessionId) {
       shadowSessionId = sessionId;
-      for (const finding of dependencies.shadow.observe(body, sessionId)) {
+      for (const finding of dependencies.shadow.observe(
+        result.request,
+        sessionId,
+      )) {
         dependencies.logger.info("skill_shadow_observed", {
           sessionId,
           skill: finding.skill,
           potentialTokens: finding.potentialTokens,
         });
       }
+      shadowRevision = dependencies.shadow.revision(sessionId);
     }
-    const canary = canaryPolicy.check(body, sessionId);
-    const result = await dependencies.pruner.prune(body, {
-      ...(sessionId ? { sessionId } : {}),
-      ...(canary.prune ? { trigger: "canary" as const } : {}),
-    });
     // Every notice for Claude is added here, and only when notices are on.
     const notices = [result.notice, canary.notice].filter(
       (notice): notice is string => notice !== undefined,
@@ -218,22 +223,31 @@ async function forward(
         });
       },
     );
-    if (upstream.ok && shadowSessionId && dependencies.shadow) {
+    if (
+      upstream.ok &&
+      shadowSessionId &&
+      shadowRevision !== undefined &&
+      dependencies.shadow
+    ) {
       const sessionId = shadowSessionId;
+      const revision = shadowRevision;
       const responseTap = createResponseTextTap(
         upstream.headers.get("content-type") ?? "",
         (reply) => {
-          void dependencies.shadow?.complete(sessionId, reply).then((findings) => {
-            for (const finding of findings) {
-              dependencies.logger.info("skill_shadow_complete", {
-                eventId: randomUUID(),
-                sessionId,
-                skill: finding.skill,
-                potentialTokens: finding.potentialTokens,
-                confidence: finding.confidence,
-              });
-            }
-          }).catch(() => undefined);
+          void dependencies.shadow
+            ?.complete(sessionId, reply, revision)
+            .then((findings) => {
+              for (const finding of findings) {
+                dependencies.logger.info("skill_shadow_complete", {
+                  eventId: randomUUID(),
+                  sessionId,
+                  skill: finding.skill,
+                  potentialTokens: finding.potentialTokens,
+                  confidence: finding.confidence,
+                });
+              }
+            })
+            .catch(() => undefined);
         },
       );
       await pipeline(stream, tap, responseTap, response);

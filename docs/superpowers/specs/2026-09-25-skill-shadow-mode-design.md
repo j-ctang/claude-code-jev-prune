@@ -12,7 +12,7 @@ Claude Code normally loads skill descriptions at session start and full skill bo
 
 ## Identification and lifecycle
 
-The observer runs independently of the existing pruner. It reads the original request and records an occurrence only if a text span can be matched exactly, after harmless newline normalization, to a local `SKILL.md` body. It searches installed user and project skill roots available to the launched Claude Code process; ambiguous matches or unsupported content formats are skipped. It never records a skill body, prompt text, or file path in the log. It stores a skill identifier, session identifier, content fingerprint, request occurrence, and estimated token count. The estimate uses the project's existing token estimator and is labeled approximate.
+The observer runs independently of the existing pruner. It reads the request after existing pruning and records an occurrence only if a text span can be matched exactly, after harmless newline normalization, to a local `SKILL.md` body. It searches installed user and project skill roots available to the launched Claude Code process; ambiguous matches or unsupported content formats are skipped. It never records a skill body, prompt text, or file path in the log. It stores a skill identifier, session identifier, request occurrence, and estimated token count. The estimate uses the project's existing token estimator and is labeled approximate.
 
 For an observed skill, Jev assesses completion using the current user goal and a completed assistant response. Only a high-confidence affirmative result creates a potential-cleanup event; errors, incomplete streams, missing session identifiers, and uncertain answers leave the skill active without a notice. The observer deduplicates repeated request appearances of the same body and reports potential savings once per completed task. A later distinct goal can create a new observation, but this mode still does not modify requests.
 
@@ -20,13 +20,13 @@ Completion assessment uses the existing TypeSafe Jev client conventions with a b
 
 ## Data flow and notice delivery
 
-The proxy observes messages without mutation, tracks the response's final text through a bounded stream tap, then records a metadata-only completion event in the existing local JSONL log. The detached proxy cannot write to the Claude Code terminal. The launcher follows experiment events for its own session and prints the one-line notice to stderr, without injecting it into the conversation. Shared-proxy events from another session are ignored. Event IDs prevent duplicate notices after polling or restarts.
+The proxy observes messages without mutation, tracks the response's final text through a bounded stream tap, then records a metadata-only completion event in the existing local JSONL log. The detached proxy cannot write to the Claude Code terminal. A launcher prints the one-line notice to stderr only while it is the sole live launcher for the shared proxy. With concurrent launchers it leaves events in stats and prints no notice, because it cannot prove which Claude Code session owns an event. Event IDs prevent duplicate notices after polling or restarts.
 
 The log uses the existing private file permissions. Stored event fields are restricted to time, session ID, skill identifier, estimated potential tokens, completion confidence, and event ID. No request or response text is persisted. The experiment may be disabled at any time with the environment flag. Existing pruning, canary behavior, and upstream forwarding remain independent.
 
 ## Validation
 
-Unit fixtures cover exact identification, normalization, ambiguous and unknown formats, deduplication, session isolation, uncertain completion, and approximate token accounting. Proxy tests prove shadow mode makes no additional change to outbound requests and existing pruning behavior is unaffected. Launcher tests prove one notice per event and no cross-session notices. These tests use synthetic requests and a fake Jev response, so they require no paid model calls. A small opt-in live pilot can later measure real detection and completion quality; its results will inform a separate cleanup design with a proven reload path.
+Unit fixtures cover exact identification, normalization, ambiguous and unknown formats, deduplication, session isolation, uncertain completion, and approximate token accounting. Proxy tests prove shadow mode makes no additional change to outbound requests and existing pruning behavior is unaffected. Launcher tests prove one notice per event with a sole launcher and no notice with concurrent launchers. These tests use synthetic requests and a fake Jev response, so they require no paid model calls. A small opt-in live pilot can later measure real detection and completion quality; its results will inform a separate cleanup design with a proven reload path.
 
 ## Explicit limits
 

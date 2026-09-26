@@ -135,6 +135,35 @@ afterEach(async () => {
 });
 
 describe("Anthropic proxy", () => {
+  test("shadow mode ignores skill text removed by the existing pruner", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shadow-pruned-"));
+    const skillBody = "Follow this detailed procedure whenever you prepare a report. Check every section carefully and verify the final output before delivering it.";
+    mkdirSync(join(root, "report"));
+    writeFileSync(join(root, "report", "SKILL.md"), `---\nname: report\n---\n${skillBody}`);
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: "Done." }] }));
+    });
+    const messages: string[] = [];
+    const logger: AppLogger = { ...silentLogger, info: (message) => { messages.push(message); } };
+    const config = testConfig(upstream.url, { skillShadow: true });
+    const shadow = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    const pruned = { messages: [{ role: "user" as const, content: "Create report." }] };
+    try {
+      await request(createApp({
+        config, shadow, logger, fetchFn: fetch, startedAt: Date.now(),
+        pruner: { prune: async () => ({ request: pruned, beforeTokens: 0, afterTokens: 0, evaluated: 0, dropped: 0, reason: "disabled" }) },
+      }))
+        .post("/v1/messages")
+        .set("x-claude-code-session-id", "session-a")
+        .send({ messages: [{ role: "user", content: `Create report.\n${skillBody}` }] })
+        .expect(200);
+      expect(upstream.requests[0]?.body).toEqual(pruned);
+      expect(messages).not.toContain("skill_shadow_observed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("shadow mode observes a skill without changing the forwarded request", async () => {
     const root = mkdtempSync(join(tmpdir(), "shadow-proxy-"));
     const skillBody = "Follow this lengthy procedure to make the report. Check each page, record every finding, and verify the final artifact before delivering it.";

@@ -16,10 +16,7 @@ import { sessionsDirectory } from "./installation.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 
-function start(
-  config: Config,
-  logger: ReturnType<typeof createLogger>,
-): void {
+function start(config: Config, logger: ReturnType<typeof createLogger>): void {
   const scorer = new JevService({
     apiKey: config.jevApiKey ?? "disabled",
     baseUrl: config.jevBaseUrl,
@@ -34,13 +31,15 @@ function start(
     stateStore: createFileStateStore(config.statePath),
   });
   const upstreamAbort = new AbortController();
-  const completionJudge = config.skillShadow ? new SkillCompletionJudge({
-    apiKey: config.jevApiKey ?? "disabled",
-    baseUrl: config.jevBaseUrl,
-    model: config.jevModel,
-    timeoutMs: config.jevTimeoutMs,
-    fetchFn: fetch,
-  }) : undefined;
+  const completionJudge = config.skillShadow
+    ? new SkillCompletionJudge({
+        apiKey: config.jevApiKey ?? "disabled",
+        baseUrl: config.jevBaseUrl,
+        model: config.jevModel,
+        timeoutMs: config.jevTimeoutMs,
+        fetchFn: fetch,
+      })
+    : undefined;
   const app = createApp({
     config,
     pruner,
@@ -48,15 +47,22 @@ function start(
     logger,
     startedAt: Date.now(),
     upstreamSignal: upstreamAbort.signal,
-    ...(config.skillShadow ? {
-      shadow: new SkillShadow({
-        roots: () => [
-          join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "skills"),
-          ...readSessionProjects(sessionsDirectory(config.port)).map((project) => join(project, ".claude", "skills")),
-        ],
-        judge: (goal, reply) => completionJudge!.score(goal, reply),
-      }),
-    } : {}),
+    ...(config.skillShadow
+      ? {
+          shadow: new SkillShadow({
+            roots: () => [
+              join(
+                process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
+                "skills",
+              ),
+              ...readSessionProjects(sessionsDirectory(config.port)).map(
+                (project) => join(project, ".claude", "skills"),
+              ),
+            ],
+            judge: (goal, reply) => completionJudge!.score(goal, reply),
+          }),
+        }
+      : {}),
   });
   const server = createServer(app);
   let shuttingDown = false;

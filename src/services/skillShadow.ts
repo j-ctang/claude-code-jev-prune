@@ -1,7 +1,6 @@
 import { readdirSync, readFileSync, type Dirent } from "node:fs";
 import { basename, join } from "node:path";
 import type { AnthropicRequest } from "../types.js";
-import { readTurn } from "./turn.js";
 
 export interface SkillFinding {
   skill: string;
@@ -19,6 +18,7 @@ interface SkillEntry extends SkillFinding {
 
 interface SessionState {
   goal: string;
+  revision: number;
   active: Map<string, SkillFinding>;
   completed: Set<string>;
 }
@@ -88,10 +88,40 @@ function requestText(request: AnthropicRequest): string {
   return normalize(strings.join("\n"));
 }
 
+function taskGoal(
+  request: AnthropicRequest,
+  skillBodies: readonly string[],
+): string {
+  for (let index = request.messages.length - 1; index >= 0; index -= 1) {
+    const message = request.messages[index];
+    if (message?.role !== "user") continue;
+    if (
+      Array.isArray(message.content) &&
+      message.content.some((block) => block.type === "tool_result")
+    )
+      continue;
+    const raw =
+      typeof message.content === "string"
+        ? message.content
+        : message.content
+            .filter(
+              (block) =>
+                block.type === "text" && typeof block.text === "string",
+            )
+            .map((block) => String(block.text))
+            .join("\n");
+    let text = normalize(raw);
+    for (const body of skillBodies) text = text.replace(body, "").trim();
+    if (text) return text;
+  }
+  return "";
+}
+
 /** Advisory observation only. It never returns a modified request. */
 export class SkillShadow {
   private readonly options: SkillShadowOptions;
   private readonly sessions = new Map<string, SessionState>();
+  private nextRevision = 1;
 
   constructor(options: SkillShadowOptions) {
     this.options = options;
@@ -100,20 +130,29 @@ export class SkillShadow {
   observe(request: AnthropicRequest, sessionId: string): SkillFinding[] {
     if (!sessionId) return [];
     const text = requestText(request);
-    const entries = skillEntries(typeof this.options.roots === "function" ? this.options.roots() : this.options.roots);
+    const entries = skillEntries(
+      typeof this.options.roots === "function"
+        ? this.options.roots()
+        : this.options.roots,
+    );
     const matched = entries.filter((entry) => text.includes(entry.body));
     const byBody = new Map<string, SkillEntry[]>();
     for (const entry of matched) {
       byBody.set(entry.body, [...(byBody.get(entry.body) ?? []), entry]);
     }
-    const goal = normalize(readTurn(request).goal);
+    const goal = taskGoal(
+      request,
+      matched.map((entry) => entry.body),
+    );
     const state = this.sessions.get(sessionId) ?? {
       goal,
+      revision: this.nextRevision++,
       active: new Map<string, SkillFinding>(),
       completed: new Set<string>(),
     };
     if (state.goal !== goal) {
       state.goal = goal;
+      state.revision = this.nextRevision++;
       state.active.clear();
       state.completed.clear();
     }
@@ -122,24 +161,53 @@ export class SkillShadow {
     for (const group of byBody.values()) {
       if (group.length !== 1) continue;
       const entry = group[0];
-      if (!entry || state.active.has(entry.skill) || state.completed.has(entry.skill)) continue;
-      const finding = { skill: entry.skill, potentialTokens: entry.potentialTokens };
+      if (
+        !entry ||
+        state.active.has(entry.skill) ||
+        state.completed.has(entry.skill)
+      )
+        continue;
+      const finding = {
+        skill: entry.skill,
+        potentialTokens: entry.potentialTokens,
+      };
       state.active.set(entry.skill, finding);
       findings.push(finding);
     }
     return findings;
   }
 
-  async complete(sessionId: string, reply: string): Promise<SkillCompletion[]> {
+  revision(sessionId: string): number {
+    return this.sessions.get(sessionId)?.revision ?? 0;
+  }
+
+  async complete(
+    sessionId: string,
+    reply: string,
+    revision: number,
+  ): Promise<SkillCompletion[]> {
     const state = this.sessions.get(sessionId);
-    if (!state || state.active.size === 0 || !reply.trim()) return [];
+    if (
+      !state ||
+      state.revision !== revision ||
+      state.active.size === 0 ||
+      !state.goal ||
+      !reply.trim()
+    )
+      return [];
     let confidence: number;
     try {
       confidence = await this.options.judge(state.goal, reply.slice(0, 8000));
     } catch {
       return [];
     }
-    if (!Number.isFinite(confidence) || confidence < 0.95 || confidence > 1) return [];
+    if (
+      state.revision !== revision ||
+      !Number.isFinite(confidence) ||
+      confidence < 0.95 ||
+      confidence > 1
+    )
+      return [];
     const results = [...state.active.values()].map((finding) => ({
       ...finding,
       confidence,
