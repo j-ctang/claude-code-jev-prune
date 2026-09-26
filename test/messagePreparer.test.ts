@@ -158,3 +158,36 @@ test("does not resend a status the router keeps", async () => {
   expect(upstream.status).toBe(429);
   expect(sends).toBe(1);
 });
+
+test("keeps an earlier turn's notice on later requests", async () => {
+  let calls = 0;
+  const { subject } = preparer({
+    async route() {
+      calls += 1;
+      return calls === 1 ? { notice: "[jev-prune] Switched." } : {};
+    },
+  });
+  const sent: AnthropicRequest[] = [];
+  const send = async (body: AnthropicRequest) => {
+    sent.push(body);
+    return response(200);
+  };
+
+  await (await subject.prepare(request, main)).send(send);
+  await (
+    await subject.prepare(
+      {
+        ...request,
+        messages: [
+          ...request.messages,
+          { role: "assistant", content: "Done." },
+          { role: "user", content: "Add tests" },
+        ],
+      },
+      main,
+    )
+  ).send(send);
+
+  expect(sent[1]?.messages[0]).toEqual(sent[0]?.messages[0]);
+  expect(JSON.stringify(sent[1]?.messages[0])).toContain("Switched");
+});

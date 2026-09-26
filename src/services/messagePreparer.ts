@@ -7,7 +7,7 @@ import type { PruneOptions } from "./contextPruner.js";
 import type { RouteDecision } from "./modelRouter.js";
 import { recordPruneOutcome } from "./pruneLog.js";
 import type { SkillShadowObserver } from "./skillShadowObserver.js";
-import { appendNotice } from "./turn.js";
+import { NoticeMemory } from "./noticeMemory.js";
 
 export interface RequestPruner {
   prune(
@@ -49,6 +49,8 @@ interface MessagePreparerDependencies {
  * canary, prunes and routes, and adds every notice for Claude.
  */
 export class MessagePreparer {
+  private readonly notices = new NoticeMemory();
+
   constructor(private readonly dependencies: MessagePreparerDependencies) {}
 
   async prepare(
@@ -76,9 +78,11 @@ export class MessagePreparer {
     // Every notice for Claude is added here, and only when notices are on.
     const withNotices = (...notices: Array<string | undefined>) =>
       config.notify
-        ? notices
-            .filter((notice): notice is string => notice !== undefined)
-            .reduce(appendNotice, result.request)
+        ? this.notices.apply(
+            conversation.key,
+            result.request,
+            notices.filter((notice): notice is string => notice !== undefined),
+          )
         : result.request;
     const unrouted = [result.notice, canary.notice];
     const routed = {
