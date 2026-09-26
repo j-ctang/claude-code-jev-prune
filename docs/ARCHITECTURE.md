@@ -78,7 +78,7 @@ A tool call is eligible only when all of these statements are true:
 
 The blocks do not need to be in adjacent messages. Candidates are ordered by the assistant block's location. Duplicate, unmatched, and malformed blocks remain untouched.
 
-When a candidate is dropped, its tool-use input becomes `{}` and its result becomes the short stub `[jev-prune] Removed as stale.` No block or message is removed, so the history keeps its shape. Removing an emptied message could leave a mid-conversation `system` message right after an assistant turn, which the API rejects with a 400. Surrounding blocks, message properties, top-level request properties, and system content are preserved.
+When a candidate is dropped, its result becomes a stub saying Claude saw the full output when the call ran. Its tool-use input keeps short fields, such as a path or command, and long strings become `[jev-prune] Removed.` A bare "removed" stub, or removing the pair outright, led Claude to say it had made up its earlier answers. A result smaller than its stub is never dropped. No block or message is removed, so the history keeps its shape. Removing an emptied message could leave a mid-conversation `system` message right after an assistant turn, which the API rejects with a 400. Surrounding blocks, message properties, top-level request properties, and system content are preserved.
 
 ## Protection and Scoring Policy
 

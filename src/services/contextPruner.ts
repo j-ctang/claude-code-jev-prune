@@ -18,6 +18,7 @@ import {
 } from "./pruneNotices.js";
 import {
   applyDecisions,
+  stubSaves,
   extractCandidates,
   loadsToolDefinitions,
 } from "./toolPairs.js";
@@ -197,11 +198,15 @@ export class ContextPruner {
       if (newRewrites) current = applyDecisions(request, dropped, rewrites);
 
       // Superseded results are never sent to Jev; trimmed ones are scored in
-      // their short form.
+      // their short form. A result smaller than its stub is never dropped.
       const eligible = live.filter(
         (candidate) =>
           !protectedIds.has(candidate.toolUseId) &&
-          !superseded.has(candidate.toolUseId),
+          !superseded.has(candidate.toolUseId) &&
+          stubSaves(
+            candidate.input,
+            rewrites.get(candidate.toolUseId) ?? candidate.result,
+          ),
       );
       const rewrittenTokens = estimateTokens(current);
       const session = sessionId ?? DEFAULT_SESSION;

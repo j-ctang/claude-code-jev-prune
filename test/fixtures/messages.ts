@@ -27,7 +27,7 @@ export const twoToolRequest: AnthropicRequest = {
         {
           type: "tool_result",
           tool_use_id: "call-old",
-          content: `stale output ${"from an earlier investigation ".repeat(4)}`,
+          content: `stale output ${"from an earlier investigation ".repeat(12)}`,
           result_meta: "preserve-result-metadata",
         },
       ],
@@ -51,7 +51,7 @@ export const twoToolRequest: AnthropicRequest = {
         {
           type: "tool_result",
           tool_use_id: "call-new",
-          content: "current output",
+          content: `current output ${"from the JWT validation code ".repeat(12)}`,
         },
       ],
     },

@@ -328,7 +328,7 @@ describe("ContextPruner", () => {
     const resultBlock = oldResult.find((block) => block.type === "tool_result");
     if (!useBlock || !resultBlock) throw new Error("invalid fixture");
     useBlock.input = { path: "different.log" };
-    resultBlock.content = "different output";
+    resultBlock.content = `different output ${"x".repeat(400)}`;
 
     await pruner.prune(twoToolRequest);
     const changed = await pruner.prune(changedRequest);
@@ -448,6 +448,45 @@ describe("ContextPruner", () => {
       ]),
     );
     expect(droppedToolIds(result.request)).toEqual(["call-old", "call-new"]);
+  });
+
+  test("keeps a dropped call's short input fields so Claude knows what ran", async () => {
+    const request = clone(twoToolRequest);
+    const use = request.messages[1]?.content;
+    if (!Array.isArray(use) || !use[1]) throw new Error("fixture changed");
+    use[1].input = { path: "old.log", content: "x".repeat(500), lines: [1, 2] };
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.9 }),
+    });
+
+    const result = await pruner.prune(request);
+    const stubbed = result.request.messages[1]?.content;
+
+    expect(Array.isArray(stubbed) && stubbed[1]?.input).toEqual({
+      path: "old.log",
+      content: "[jev-prune] Removed.",
+      lines: [1, 2],
+    });
+  });
+
+  test("never drops a result smaller than its stub", async () => {
+    const observed = { goals: [] as string[], batches: [] as ToolCandidate[][] };
+    const request = clone(twoToolRequest);
+    const result = request.messages[2]?.content;
+    if (!Array.isArray(result) || !result[0]) throw new Error("fixture changed");
+    result[0].content = "ok";
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.1 }, observed),
+    });
+
+    const pruned = await pruner.prune(request);
+
+    expect(observed.batches.flat().map((candidate) => candidate.toolUseId)).toEqual([
+      "call-new",
+    ]);
+    expect(droppedToolIds(pruned.request)).toEqual(["call-new"]);
   });
 
   test("does not score while the agent is mid-task", async () => {
@@ -611,7 +650,7 @@ describe("ContextPruner", () => {
 
       const first = await pruner.prune(twoToolRequest, { sessionId: "s" });
       const second = await pruner.prune(twoToolRequest, { sessionId: "s" });
-      const third = await pruner.prune(withExtraPair("call-3", "ok"), { sessionId: "s" });
+      const third = await pruner.prune(withExtraPair("call-3", `ok ${"x".repeat(400)}`), { sessionId: "s" });
 
       expect(first.evaluated).toBe(2);
       expect(second.reason).toBe("no-candidates");
@@ -683,7 +722,7 @@ describe("ContextPruner", () => {
       });
 
       await pruner.prune(twoToolRequest, { sessionId: "a" });
-      await pruner.prune(withExtraPair("call-3", "ok"), { sessionId: "b" });
+      await pruner.prune(withExtraPair("call-3", `ok ${"x".repeat(400)}`), { sessionId: "b" });
 
       expect(batchIds(observed)).toEqual([
         ["call-old", "call-new"],
@@ -821,9 +860,9 @@ describe("ContextPruner", () => {
         .flatMap((message) => (Array.isArray(message.content) ? message.content : []))
         .find((block) => block.type === "tool_result" && block.tool_use_id === id);
     const pairs: Pair[] = [
-      { id: "read-1", name: "Read", input: { file_path: "src/auth.ts" }, output: "1\told" },
+      { id: "read-1", name: "Read", input: { file_path: "src/auth.ts" }, output: `1\told\n${"2\tbody\n".repeat(80)}` },
       { id: "bash-big", name: "Bash", input: { command: "npm test" }, output: bigLog },
-      { id: "read-2", name: "Read", input: { file_path: "src/auth.ts" }, output: "1\tnew" },
+      { id: "read-2", name: "Read", input: { file_path: "src/auth.ts" }, output: `1\tnew\n${"2\tbody\n".repeat(80)}` },
     ];
     const rewriteConfig = (overrides: Partial<Config> = {}) =>
       config({

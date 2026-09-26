@@ -5,6 +5,7 @@ import type {
   ToolResultBlock,
   ToolUseBlock,
 } from "../types.js";
+import { estimateTokens } from "../utils/tokenCounter.js";
 
 interface Located<Block> {
   messageIndex: number;
@@ -91,8 +92,40 @@ export function extractCandidates(request: AnthropicRequest): ToolCandidate[] {
   );
 }
 
-/** What a dropped tool call's result becomes. */
-export const DROPPED_STUB = "[jev-prune] Removed as stale.";
+/**
+ * What a dropped tool call's result becomes. It says Claude saw the output:
+ * a bare "removed" led Claude to decide it had made up its earlier answers.
+ */
+export const DROPPED_STUB =
+  "[jev-prune] Output removed to save context. You saw it in full when this call ran, so replies you gave after it were based on it.";
+
+const MAX_KEPT_INPUT_CHARS = 200;
+const REMOVED_INPUT = "[jev-prune] Removed.";
+
+/**
+ * A dropped call keeps its short input fields (a path, a pattern, a command)
+ * so Claude knows what it ran. Long strings, like a file written, are removed.
+ */
+export function stubInput(input: unknown): unknown {
+  if (typeof input === "string") {
+    return input.length > MAX_KEPT_INPUT_CHARS ? REMOVED_INPUT : input;
+  }
+  if (Array.isArray(input)) return input.map(stubInput);
+  if (typeof input === "object" && input !== null) {
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [key, stubInput(value)]),
+    );
+  }
+  return input;
+}
+
+/** Whether stubbing a call makes the request smaller. */
+export function stubSaves(input: unknown, result: unknown): boolean {
+  return (
+    estimateTokens(input) + estimateTokens(result) >
+    estimateTokens(stubInput(input)) + estimateTokens(DROPPED_STUB)
+  );
+}
 
 /**
  * Stubs dropped tool pairs and replaces rewritten tool-result content. Blocks
@@ -116,7 +149,7 @@ export function applyDecisions(
         droppedIds.has(block.id)
       ) {
         changed = true;
-        return { ...block, input: {} };
+        return { ...block, input: stubInput(block.input) };
       }
       if (message.role === "user" && isToolResult(block)) {
         if (droppedIds.has(block.tool_use_id)) {
