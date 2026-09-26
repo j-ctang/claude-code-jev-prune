@@ -175,7 +175,7 @@ describe("Anthropic proxy", () => {
     writeFileSync(join(root, "report", "SKILL.md"), `---\nname: report\n---\n${skillBody}`);
     const upstream = await startUpstream((_incoming, response) => {
       response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: "Report complete." }] }));
+      response.end(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: "Report complete." }], usage: { input_tokens: 12 } }));
     });
     const events: string[] = [];
     const logger: AppLogger = { ...silentLogger, info: (message) => { events.push(message); } };
@@ -184,14 +184,16 @@ describe("Anthropic proxy", () => {
     const shadow = new SkillShadow({ catalog, judge: async () => 0.99 });
     const body = { messages: [{ role: "user", content: `Create a report.\n${skillBody}` }] };
     try {
-      await request(appFor(upstream.url, { score: async () => new Map() }, { skillShadow: true }, logger, shadow))
+      const result = await request(appFor(upstream.url, { score: async () => new Map() }, { skillShadow: true }, logger, shadow))
         .post("/v1/messages")
         .set("x-claude-code-session-id", "session-a")
         .send(body)
         .expect(200);
       expect(upstream.requests[0]?.body).toEqual(body);
+      expect(result.body.content[0].text).toBe("Report complete.");
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(events).toContain("skill_shadow_complete");
+      expect(events).toContain("anthropic_usage");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

@@ -87,3 +87,18 @@ test("refreshes added, changed, and deleted skills without attributing old conte
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("refreshes while the proxy is idle", async () => {
+  const root = mkdtempSync(join(tmpdir(), "catalog-idle-"));
+  const catalog = new SkillCatalog({ roots: () => [root], refreshIntervalMs: 10 });
+  try {
+    skill(root, "pdf");
+    await catalog.start();
+    skill(root, "report", `${body} The report procedure is different.`);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(catalog.entries().map((entry) => entry.skill)).toEqual(["pdf", "report"]);
+  } finally {
+    catalog.stop();
+    rmSync(root, { recursive: true, force: true });
+  }
+});

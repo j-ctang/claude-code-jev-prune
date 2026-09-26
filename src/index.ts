@@ -87,6 +87,7 @@ async function start(config: Config, logger: ReturnType<typeof createLogger>): P
   const shutdown = (signal: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    catalog?.stop();
     logger.info("proxy_stopping", { signal });
     void shutdownServer(server, {
       timeoutMs: SHUTDOWN_TIMEOUT_MS,

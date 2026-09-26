@@ -78,6 +78,7 @@ export class SkillCatalog {
   private desiredKey = "";
   private snapshot: { key: string; at: number; entries: readonly SkillEntry[] } | undefined;
   private pending: { key: string; promise: Promise<void> } | undefined;
+  private timer: NodeJS.Timeout | undefined;
 
   constructor(options: Options) {
     this.options = options;
@@ -86,6 +87,17 @@ export class SkillCatalog {
 
   async start(): Promise<void> {
     await this.refreshIfNeeded();
+    if (!this.timer) {
+      this.timer = setInterval(() => {
+        void this.refreshIfNeeded();
+      }, this.intervalMs);
+      this.timer.unref();
+    }
+  }
+
+  stop(): void {
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 
   entries(): readonly SkillEntry[] {
