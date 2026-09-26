@@ -4,11 +4,15 @@ import { resolve } from "node:path";
 import { loadConfig, parsePort, withoutCredentials } from "./config.js";
 import { loadInstallEnv, localProxyClient } from "./checkout.js";
 import { sessionsDirectory } from "./installation.js";
-import { formatTokens } from "./proxyClient.js";
+import { logPath } from "./installation.js";
+import { skillShadowNotices } from "./services/skillShadowLog.js";
+import { createSkillShadowLogFollower } from "./services/skillShadowLogFollower.js";
+import { assertSkillShadowMode, formatTokens } from "./proxyClient.js";
 import {
   liveSessions,
   registerSession,
   unregisterSession,
+  wasShared,
 } from "./sessions.js";
 
 async function main(): Promise<void> {
@@ -41,10 +45,31 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
 
   const sessions = sessionsDirectory(proxy.port);
-  registerSession(sessions, process.pid);
+  const existing = await proxy.probe();
+  if (existing) assertSkillShadowMode(existing, config.skillShadow);
+  registerSession(sessions, process.pid, project);
   let stopWatching = () => {};
+  let stopShadowNotices = () => {};
   try {
+    if (config.skillShadow) {
+      const seen = new Set<string>();
+      const follower = createSkillShadowLogFollower(logPath);
+      const poll = () => {
+        for (const line of skillShadowNotices(
+          follower.poll(),
+          seen,
+          !wasShared(sessions) && liveSessions(sessions).length === 1,
+        ))
+          process.stderr.write(`${line}\n`);
+      };
+      const interval = setInterval(poll, 750);
+      stopShadowNotices = () => {
+        clearInterval(interval);
+        poll();
+      };
+    }
     const running = await proxy.probe();
+    if (running) assertSkillShadowMode(running, config.skillShadow);
     if (running && proxy.isOutdated(running)) {
       process.stderr.write(
         "Jev Prune was updated. Close all jev-prune sessions to load the new version.\n",
@@ -57,6 +82,7 @@ async function main(): Promise<void> {
       );
     }
     const before = running ?? (await proxy.ensureRunning());
+    assertSkillShadowMode(before, config.skillShadow);
     // Restart the proxy if it dies, so Claude Code does not lose its API.
     stopWatching = proxy.watch();
     const noProxy = [
@@ -98,6 +124,7 @@ async function main(): Promise<void> {
       );
     }
   } finally {
+    stopShadowNotices();
     stopWatching();
     unregisterSession(sessions, process.pid);
     if (liveSessions(sessions).length === 0) await proxy.stop();

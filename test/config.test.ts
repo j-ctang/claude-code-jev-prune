@@ -20,6 +20,7 @@ describe("loadConfig", () => {
       loadConfig({ TYPESAFE_API_KEY: "secret", JEV_PRUNE_STATE_PATH: "" }).statePath,
     ).toBe(config.statePath);
     expect(config.notify).toBe(true);
+    expect(config.skillShadow).toBe(false);
     expect(config.keepRecent).toBe(5);
     expect(config.jevModel).toBe("jev-latest");
     expect(config.jevBaseUrl).toBe("https://api.typesafe.ai");
@@ -113,6 +114,11 @@ describe("loadConfig", () => {
         JEV_PRUNE_DEBUG: "yes",
       }),
     ).toThrow("JEV_PRUNE_DEBUG must be true or false");
+  });
+
+  test("enables opt-in skill observation", () => {
+    expect(loadConfig({ TYPESAFE_API_KEY: "secret", JEV_PRUNE_SKILL_SHADOW: "true" }).skillShadow).toBe(true);
+    expect(() => loadConfig({ JEV_PRUNE_ENABLED: "false", JEV_PRUNE_SKILL_SHADOW: "true" })).toThrow("TYPESAFE_API_KEY is required when skill shadow mode is enabled");
   });
 
   test("normalizes comma-separated excluded tools", () => {

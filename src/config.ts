@@ -44,6 +44,7 @@ export interface Config {
   trimMinTokens: number;
   trimKeepTokens: number;
   notify: boolean;
+  skillShadow: boolean;
   canaryPrefix?: string;
   canaryAction?: "notice" | "prune";
   keepRecent: number;
@@ -142,8 +143,17 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   const jevApiKey = hasRealKey(env.TYPESAFE_API_KEY)
     ? env.TYPESAFE_API_KEY
     : undefined;
+  const skillShadow = parseBoolean(
+    env.JEV_PRUNE_SKILL_SHADOW ?? "false",
+    "JEV_PRUNE_SKILL_SHADOW",
+  );
   if (pruningEnabled && !jevApiKey) {
     throw new Error("TYPESAFE_API_KEY is required when pruning is enabled");
+  }
+  if (skillShadow && !jevApiKey) {
+    throw new Error(
+      "TYPESAFE_API_KEY is required when skill shadow mode is enabled",
+    );
   }
 
   return {
@@ -178,6 +188,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     trimMinTokens,
     trimKeepTokens,
     notify: parseBoolean(env.JEV_PRUNE_NOTIFY ?? "true", "JEV_PRUNE_NOTIFY"),
+    skillShadow,
     canaryPrefix: env.JEV_CANARY_PREFIX?.trim() ?? "",
     canaryAction,
     keepRecent: parseInteger(

@@ -35,6 +35,7 @@ function config(overrides: Partial<Config> = {}): Config {
     trimMinTokens: 10_000,
     trimKeepTokens: 2_000,
     notify: false,
+    skillShadow: false,
     keepRecent: 0,
     excludeTools: new Set(),
     debug: false,

@@ -7,13 +7,18 @@ import { JevService } from "./services/jevService.js";
 import { createFileStateStore } from "./services/pruneState.js";
 import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
+import { SkillShadow, skillRootsForProjects } from "./services/skillShadow.js";
+import { SkillCompletionJudge } from "./services/skillCompletion.js";
+import { SkillCatalog } from "./services/skillCatalog.js";
+import { SkillShadowObserver } from "./services/skillShadowObserver.js";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { readSessionProjects } from "./sessions.js";
+import { sessionsDirectory } from "./installation.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 
-function start(
-  config: Config,
-  logger: ReturnType<typeof createLogger>,
-): void {
+async function start(config: Config, logger: ReturnType<typeof createLogger>): Promise<void> {
   const scorer = new JevService({
     apiKey: config.jevApiKey ?? "disabled",
     baseUrl: config.jevBaseUrl,
@@ -28,6 +33,24 @@ function start(
     stateStore: createFileStateStore(config.statePath),
   });
   const upstreamAbort = new AbortController();
+  const completionJudge = config.skillShadow
+    ? new SkillCompletionJudge({
+        apiKey: config.jevApiKey ?? "disabled",
+        baseUrl: config.jevBaseUrl,
+        model: config.jevModel,
+        timeoutMs: config.jevTimeoutMs,
+        fetchFn: fetch,
+      })
+    : undefined;
+  const catalog = config.skillShadow
+    ? new SkillCatalog({
+        roots: () => skillRootsForProjects(
+          join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "skills"),
+          readSessionProjects(sessionsDirectory(config.port)),
+        ),
+      })
+    : undefined;
+  await catalog?.start();
   const app = createApp({
     config,
     pruner,
@@ -35,6 +58,17 @@ function start(
     logger,
     startedAt: Date.now(),
     upstreamSignal: upstreamAbort.signal,
+    ...(config.skillShadow
+      ? {
+          shadowObserver: new SkillShadowObserver(
+            new SkillShadow({
+              catalog: catalog!,
+              judge: (goal, reply) => completionJudge!.score(goal, reply),
+            }),
+            logger,
+          ),
+        }
+      : {}),
   });
   const server = createServer(app);
   let shuttingDown = false;
@@ -53,6 +87,7 @@ function start(
   const shutdown = (signal: NodeJS.Signals) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    catalog?.stop();
     logger.info("proxy_stopping", { signal });
     void shutdownServer(server, {
       timeoutMs: SHUTDOWN_TIMEOUT_MS,
@@ -80,7 +115,13 @@ let logger: ReturnType<typeof createLogger> | undefined;
 try {
   const config = loadConfig(process.env);
   logger = createLogger({ level: config.debug ? "debug" : "info" });
-  start(config, logger);
+  void start(config, logger).catch((error: unknown) => {
+    logger?.error("proxy_startup_failed", {
+      error: error instanceof Error ? error.message : "unknown error",
+    });
+    process.exitCode = 1;
+    logger?.end();
+  });
 } catch (error) {
   const failureLogger = logger ?? createLogger();
   failureLogger.error("proxy_startup_failed", {

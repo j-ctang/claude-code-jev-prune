@@ -52,6 +52,10 @@ Express application
 | `src/proxyClient.ts` | Find, start, watch, and stop the shared proxy through `/health`. |
 | `src/checkout.ts`, `src/installation.ts` | Hold every checkout and `~/.claude` path the launcher scripts use. |
 | `src/services/pruneLog.ts` | Record each prune in the counters and log, and read the log back for `--stats`. |
+| `src/services/skillCatalog.ts` | Refresh an immutable catalog of eligible local skill bodies outside the request path. |
+| `src/services/skillShadow.ts` | Match catalog entries to requests and track task completion state without changing requests. |
+| `src/services/skillShadowObserver.ts` | Record metadata-only shadow observations and completion findings. |
+| `src/services/skillShadowLogFollower.ts` | Follow appended log bytes for launcher notices, including UTF-8 and file replacement state. |
 | `src/stats.ts` | Report prune totals from the log and the running proxy. |
 | `src/doctor.ts` | Check the install and explain how to fix each problem. |
 
@@ -160,6 +164,8 @@ Anthropic request headers are not reused for TypeSafe calls.
 ## Response Streaming
 
 The proxy waits only for Anthropic's response headers. It copies the upstream status and non-hop-by-hop headers, converts the web response body to a Node readable stream, and pipelines it to the downstream response. It does not buffer a full server-sent event response.
+
+When skill shadow mode is enabled, a bounded response tap also observes the final assistant reply. The shadow observer uses that reply for advisory completion scoring after the response ends. It never changes response bytes.
 
 Because native `fetch` may decompress an upstream response, stale `content-encoding` and `content-length` headers are removed before relay.
 

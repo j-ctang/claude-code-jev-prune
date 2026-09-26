@@ -10,6 +10,8 @@ import { CanaryPolicy } from "../services/canary.js";
 import type { PruneOptions } from "../services/contextPruner.js";
 import { recordPruneOutcome } from "../services/pruneLog.js";
 import { appendNotice } from "../services/turn.js";
+import type { SkillShadowObserver } from "../services/skillShadowObserver.js";
+import { createResponseTextTap } from "../utils/responseTextTap.js";
 
 interface RequestPruner {
   prune(
@@ -27,6 +29,7 @@ export interface ProxyDependencies {
   logger: AppLogger;
   stats: ProxyStats;
   upstreamSignal?: AbortSignal;
+  shadowObserver?: SkillShadowObserver;
 }
 
 const REQUEST_HEADER_BLOCKLIST = new Set([
@@ -122,6 +125,7 @@ async function forward(
 ): Promise<void> {
   dependencies.stats.requests += 1;
   let body = request.body as unknown;
+  let onFinalReply: ((reply: string) => void) | undefined;
   const path = request.originalUrl.split("?", 1)[0];
 
   if (
@@ -136,6 +140,8 @@ async function forward(
       ...(sessionId ? { sessionId } : {}),
       ...(canary.prune ? { trigger: "canary" as const } : {}),
     });
+    if (dependencies.config.skillShadow && dependencies.shadowObserver && sessionId)
+      onFinalReply = dependencies.shadowObserver.observe(result.request, sessionId);
     // Every notice for Claude is added here, and only when notices are on.
     const notices = [result.notice, canary.notice].filter(
       (notice): notice is string => notice !== undefined,
@@ -203,7 +209,15 @@ async function forward(
         });
       },
     );
-    await pipeline(stream, tap, response);
+    if (upstream.ok && onFinalReply) {
+      const responseTap = createResponseTextTap(
+        upstream.headers.get("content-type") ?? "",
+        onFinalReply,
+      );
+      await pipeline(stream, tap, responseTap, response);
+    } else {
+      await pipeline(stream, tap, response);
+    }
     return;
   }
   await pipeline(stream, response);

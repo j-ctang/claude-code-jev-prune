@@ -58,6 +58,16 @@ jev-prune --setup    # answer the setup questions again
 
 If your `CLAUDE.md` tells Claude to start every reply with a fixed word, setup can use it as a canary. When Claude stops using it, Jev Prune suggests `/jev-prune`. Type `/jev-prune-auto` to prune on those misses automatically, or `/jev-prune-auto-off` to go back to suggestions.
 
+## Skill cleanup experiment (opt-in)
+
+Set `JEV_PRUNE_SKILL_SHADOW=true` in `.env` to measure possible savings from removing a full skill body after its task finishes. This experiment **does not remove skill content**. It looks for an exact match to a local user or project `SKILL.md` body in the request, then asks Jev whether the task is complete after a finished assistant reply. Unknown or ambiguous content and uncertain answers produce no finding.
+
+All launchers sharing one proxy must use the same shadow setting. If you change the flag while another session is running, close that session or use another `PORT` before launching.
+
+`jev-prune --stats` reports observations, high-confidence completions, and approximate **potential** tokens separately from tokens actually removed. When the proxy has served only one `jev-prune` launcher, it also prints one short terminal line for a completion finding. If launchers share the proxy, terminal notices stay suppressed until the proxy restarts so one terminal cannot show another session's finding. The log contains only metadata, not skill or conversation text. Completion checks make additional TypeSafe calls only for sessions where a full skill body was identified.
+
+If launchers from different projects share a proxy, shadow mode observes user skills only. It skips project skills because the proxy cannot reliably assign each request to a project.
+
 ## Settings
 
 Settings are in `.env` in this folder. The useful ones:
@@ -67,6 +77,7 @@ Settings are in `.env` in this folder. The useful ones:
 | `JEV_PRUNE_THRESHOLD` | `120000` | Context size that starts automatic pruning |
 | `JEV_PRUNE_KEEP_RECENT` | `5` | Newest tool results that are never pruned |
 | `JEV_PRUNE_ENABLED` | `true` | `false` passes everything through untouched |
+| `JEV_PRUNE_SKILL_SHADOW` | `false` | Observe full skill bodies and estimate possible cleanup savings without removing them |
 | `PORT` | `5590` | Local port for the proxy |
 
 All settings are listed in [.env.example](./.env.example).

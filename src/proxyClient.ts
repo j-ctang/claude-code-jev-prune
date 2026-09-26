@@ -7,6 +7,13 @@ export interface ProxyHealth {
   tokens_removed?: number;
   started_at?: string;
   upstream?: string;
+  skill_shadow_enabled?: boolean;
+}
+
+/** A shared proxy must not apply one launcher's opt-in choice to another. */
+export function assertSkillShadowMode(health: ProxyHealth, requested: boolean): void {
+  if ((health.skill_shadow_enabled ?? false) !== requested)
+    throw new Error("Jev Prune is already running with a different skill shadow setting. Close its sessions or use another PORT.");
 }
 
 export interface ProxyClientDependencies {

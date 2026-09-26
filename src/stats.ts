@@ -3,6 +3,7 @@ import { parsePort } from "./config.js";
 import { loadInstallEnv, localProxyClient } from "./checkout.js";
 import { logPath } from "./installation.js";
 import { summarizeLog } from "./services/pruneLog.js";
+import { summarizeSkillShadowLog } from "./services/skillShadowLog.js";
 import { formatTokens } from "./proxyClient.js";
 
 async function main(): Promise<void> {
@@ -15,6 +16,7 @@ async function main(): Promise<void> {
     // No log yet means nothing has been pruned.
   }
   const summary = summarizeLog(raw);
+  const shadow = summarizeSkillShadowLog(raw);
   const lines = [
     summary.prunes === 0
       ? "No prunes yet."
@@ -23,6 +25,10 @@ async function main(): Promise<void> {
   if (summary.failOpens > 0)
     lines.push(
       `${summary.failOpens} request${summary.failOpens === 1 ? "" : "s"} went through unpruned because TypeSafe did not answer.`,
+    );
+  if (shadow.observed > 0 || shadow.completed > 0)
+    lines.push(
+      `Skill shadow: ${shadow.observed} observation${shadow.observed === 1 ? "" : "s"}, ${shadow.completed} high-confidence completion${shadow.completed === 1 ? "" : "s"}, about ${formatTokens(shadow.potentialTokens)} potential tokens (none removed by shadow mode).`,
     );
   const live = await proxy.probe().catch(() => undefined);
   lines.push(
