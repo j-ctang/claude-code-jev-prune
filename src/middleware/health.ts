@@ -19,6 +19,7 @@ export function createHealthHandler(
       pid: process.pid,
       jev_configured: Boolean(dependencies.config.jevApiKey),
       pruning_enabled: dependencies.config.pruningEnabled,
+      skill_shadow_enabled: dependencies.config.skillShadow,
       upstream: withoutCredentials(dependencies.config.anthropicUpstreamUrl),
       requests: dependencies.stats.requests,
       pruning_decisions: dependencies.stats.pruningDecisions,

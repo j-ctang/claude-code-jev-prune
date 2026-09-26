@@ -53,9 +53,8 @@ export function createResponseTextTap(
   return new Transform({
     transform(chunk: Buffer, _encoding, callback: TransformCallback) {
       if (!overflow) {
-        buffered += decoder
-          .decode(chunk, { stream: true })
-          .replace(/\r\n/g, "\n");
+        buffered += decoder.decode(chunk, { stream: true });
+        buffered = buffered.replace(/\r\n/g, "\n");
         if (buffered.length > MAX_BYTES) overflow = true;
         else if (stream) consume();
       }

@@ -43,6 +43,16 @@ test("does not score a streamed tool-use response as a finished task", async () 
   expect((await run(chunks, "text/event-stream")).finals).toEqual([]);
 });
 
+test("recognizes CRLF stream frames split across network chunks", async () => {
+  const response = [
+    'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Done"}}\r\n\r\n',
+    'data: {"type":"message_delta","delta":{"stop_reason":"end_turn"}}\r\n\r\n',
+    'data: {"type":"message_stop"}\r\n\r\n',
+  ].join("");
+  const split = response.indexOf("\r\n\r\n") + 3;
+  expect((await run([response.slice(0, split), response.slice(split)], "text/event-stream")).finals).toEqual(["Done"]);
+});
+
 test("does not report an incomplete stream", async () => {
   const chunks = [
     'data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"Working"}}\n\n',

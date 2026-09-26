@@ -52,6 +52,28 @@ describe("SkillShadow", () => {
     rmSync(other, { recursive: true, force: true });
   });
 
+  test("deduplicates the same skill installed in two projects", () => {
+    const other = mkdtempSync(join(tmpdir(), "skill-shadow-same-"));
+    mkdirSync(join(other, "pdf"));
+    writeFileSync(join(other, "pdf", "SKILL.md"), `---\nname: pdf\n---\n${body}`);
+    try {
+      const shadow = new SkillShadow({ roots: [root, other], judge: async () => 1 });
+      expect(shadow.observe({ messages: [{ role: "user", content: `Create report.\n${body}` }] }, "s")).toHaveLength(1);
+    } finally { rmSync(other, { recursive: true, force: true }); }
+  });
+
+  test("keeps distinct bodies that share a skill directory name", async () => {
+    const other = mkdtempSync(join(tmpdir(), "skill-shadow-variant-"));
+    const variant = "Use these alternate instructions for the report. Verify every chart, check every caption, and render the final document again before delivery.";
+    mkdirSync(join(other, "pdf"));
+    writeFileSync(join(other, "pdf", "SKILL.md"), `---\nname: pdf\n---\n${variant}`);
+    try {
+      const shadow = new SkillShadow({ roots: [root, other], judge: async () => 0.99 });
+      expect(shadow.observe({ messages: [{ role: "user", content: `Create report.\n${body}\n${variant}` }] }, "s")).toHaveLength(2);
+      expect(await shadow.complete("s", "Done.", shadow.revision("s"))).toHaveLength(2);
+    } finally { rmSync(other, { recursive: true, force: true }); }
+  });
+
   test("records only high-confidence task completion", async () => {
     const low = new SkillShadow({ roots: [root], judge: async () => 0.8 });
     low.observe(
@@ -153,5 +175,29 @@ describe("SkillShadow", () => {
     );
     answer(0.99);
     expect(await pending).toEqual([]);
+  });
+
+  test("scores only once while a completion judgment is in flight", async () => {
+    let answer!: (confidence: number) => void;
+    let calls = 0;
+    const pending = new Promise<number>((resolve) => { answer = resolve; });
+    const shadow = new SkillShadow({ roots: [root], judge: () => { calls += 1; return pending; } });
+    shadow.observe({ messages: [{ role: "user", content: `Make report.\n${body}` }] }, "s");
+    const revision = shadow.revision("s");
+    const first = shadow.complete("s", "Done.", revision);
+    const second = shadow.complete("s", "Done.", revision);
+    answer(0.99);
+    expect(await second).toEqual([]);
+    expect(await first).toHaveLength(1);
+    expect(calls).toBe(1);
+  });
+
+  test("evicts old sessions from the persistent observer", async () => {
+    const shadow = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    shadow.observe({ messages: [{ role: "user", content: `Make report.\n${body}` }] }, "old");
+    const revision = shadow.revision("old");
+    for (let index = 0; index < 129; index += 1)
+      shadow.observe({ messages: [{ role: "user", content: `Make report ${index}.\n${body}` }] }, `new-${index}`);
+    expect(await shadow.complete("old", "Done.", revision)).toEqual([]);
   });
 });

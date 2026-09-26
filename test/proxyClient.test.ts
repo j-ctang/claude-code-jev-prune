@@ -1,4 +1,4 @@
-import { ProxyClient } from "../src/proxyClient.js";
+import { assertSkillShadowMode, ProxyClient } from "../src/proxyClient.js";
 
 const noProcess = {
   startProcess: () => ({ exited: () => true }),
@@ -18,6 +18,11 @@ function fakeProxy(options: { up: boolean; body?: unknown }) {
 }
 
 describe("ProxyClient", () => {
+  test("rejects reuse of a proxy with a different shadow opt-in setting", () => {
+    expect(() => assertSkillShadowMode({ skill_shadow_enabled: true }, false)).toThrow("different skill shadow setting");
+    expect(() => assertSkillShadowMode({ skill_shadow_enabled: false }, true)).toThrow("different skill shadow setting");
+    expect(() => assertSkillShadowMode({ skill_shadow_enabled: true }, true)).not.toThrow();
+  });
   test("reuses a running proxy without starting another", async () => {
     const { state, fetch } = fakeProxy({ up: true });
     const client = new ProxyClient(5590, {

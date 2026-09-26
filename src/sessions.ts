@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -6,6 +7,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+
+const SHARED_MARKER = ".shared";
 
 /**
  * Tracks which launcher processes share one proxy. The last launcher to exit
@@ -17,7 +20,16 @@ export function registerSession(
   project = "",
 ): void {
   mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (liveSessions(directory).length === 0)
+    rmSync(join(directory, SHARED_MARKER), { force: true });
   writeFileSync(join(directory, String(pid)), project, { mode: 0o600 });
+  if (liveSessions(directory).length > 1)
+    writeFileSync(join(directory, SHARED_MARKER), "", { mode: 0o600 });
+}
+
+/** True after this proxy has had more than one live launcher. */
+export function wasShared(directory: string): boolean {
+  return existsSync(join(directory, SHARED_MARKER));
 }
 
 /** Project directories advertised by live launchers sharing this proxy. */

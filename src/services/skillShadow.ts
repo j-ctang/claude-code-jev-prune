@@ -1,4 +1,5 @@
 import { readdirSync, readFileSync, type Dirent } from "node:fs";
+import { createHash } from "node:crypto";
 import { basename, join } from "node:path";
 import type { AnthropicRequest } from "../types.js";
 
@@ -14,11 +15,13 @@ export interface SkillCompletion extends SkillFinding {
 
 interface SkillEntry extends SkillFinding {
   body: string;
+  key: string;
 }
 
 interface SessionState {
   goal: string;
   revision: number;
+  pendingRevision?: number;
   active: Map<string, SkillFinding>;
   completed: Set<string>;
 }
@@ -65,6 +68,7 @@ function skillEntries(roots: readonly string[]): SkillEntry[] {
         entries.push({
           skill: basename(join(path, "..")),
           body,
+          key: createHash("sha256").update(body).digest("hex"),
           potentialTokens: Math.ceil(body.length / 4),
         });
       } catch {
@@ -119,6 +123,7 @@ function taskGoal(
 
 /** Advisory observation only. It never returns a modified request. */
 export class SkillShadow {
+  private static readonly MAX_SESSIONS = 128;
   private readonly options: SkillShadowOptions;
   private readonly sessions = new Map<string, SessionState>();
   private nextRevision = 1;
@@ -144,7 +149,8 @@ export class SkillShadow {
       request,
       matched.map((entry) => entry.body),
     );
-    const state = this.sessions.get(sessionId) ?? {
+    const existing = this.sessions.get(sessionId);
+    const state = existing ?? {
       goal,
       revision: this.nextRevision++,
       active: new Map<string, SkillFinding>(),
@@ -153,25 +159,31 @@ export class SkillShadow {
     if (state.goal !== goal) {
       state.goal = goal;
       state.revision = this.nextRevision++;
+      delete state.pendingRevision;
       state.active.clear();
       state.completed.clear();
+    }
+    if (existing) this.sessions.delete(sessionId);
+    else if (this.sessions.size >= SkillShadow.MAX_SESSIONS) {
+      const oldest = this.sessions.keys().next().value;
+      if (oldest) this.sessions.delete(oldest);
     }
     this.sessions.set(sessionId, state);
     const findings: SkillFinding[] = [];
     for (const group of byBody.values()) {
-      if (group.length !== 1) continue;
+      if (new Set(group.map((entry) => entry.skill)).size !== 1) continue;
       const entry = group[0];
       if (
         !entry ||
-        state.active.has(entry.skill) ||
-        state.completed.has(entry.skill)
+        state.active.has(entry.key) ||
+        state.completed.has(entry.key)
       )
         continue;
       const finding = {
         skill: entry.skill,
         potentialTokens: entry.potentialTokens,
       };
-      state.active.set(entry.skill, finding);
+      state.active.set(entry.key, finding);
       findings.push(finding);
     }
     return findings;
@@ -190,18 +202,23 @@ export class SkillShadow {
     if (
       !state ||
       state.revision !== revision ||
+      state.pendingRevision === revision ||
       state.active.size === 0 ||
       !state.goal ||
       !reply.trim()
     )
       return [];
+    state.pendingRevision = revision;
     let confidence: number;
     try {
       confidence = await this.options.judge(state.goal, reply.slice(0, 8000));
     } catch {
+      if (state.pendingRevision === revision) delete state.pendingRevision;
       return [];
     }
+    if (state.pendingRevision === revision) delete state.pendingRevision;
     if (
+      this.sessions.get(sessionId) !== state ||
       state.revision !== revision ||
       !Number.isFinite(confidence) ||
       confidence < 0.95 ||
@@ -213,7 +230,7 @@ export class SkillShadow {
       confidence,
       sessionId,
     }));
-    for (const finding of results) state.completed.add(finding.skill);
+    for (const key of state.active.keys()) state.completed.add(key);
     state.active.clear();
     return results;
   }

@@ -20,7 +20,7 @@ Completion assessment uses the existing TypeSafe Jev client conventions with a b
 
 ## Data flow and notice delivery
 
-The proxy observes messages without mutation, tracks the response's final text through a bounded stream tap, then records a metadata-only completion event in the existing local JSONL log. The detached proxy cannot write to the Claude Code terminal. A launcher prints the one-line notice to stderr only while it is the sole live launcher for the shared proxy. With concurrent launchers it leaves events in stats and prints no notice, because it cannot prove which Claude Code session owns an event. Event IDs prevent duplicate notices after polling or restarts.
+The proxy observes messages without mutation, tracks the response's final text through a bounded stream tap, then records a metadata-only completion event in the existing local JSONL log. The detached proxy cannot write to the Claude Code terminal. A launcher prints the one-line notice to stderr only if the proxy has served a single launcher throughout its life. After concurrent launchers share a proxy, it leaves events in stats and prints no notice until that proxy restarts, because it cannot prove which Claude Code session owns a delayed event. Event IDs prevent duplicate notices after polling or restarts.
 
 The log uses the existing private file permissions. Stored event fields are restricted to time, session ID, skill identifier, estimated potential tokens, completion confidence, and event ID. No request or response text is persisted. The experiment may be disabled at any time with the environment flag. Existing pruning, canary behavior, and upstream forwarding remain independent.
 
