@@ -66,6 +66,8 @@ All launchers sharing one proxy must use the same shadow setting. If you change 
 
 `jev-prune --stats` reports observations, high-confidence completions, and approximate **potential** tokens separately from tokens actually removed. When the proxy has served only one `jev-prune` launcher, it also prints one short terminal line for a completion finding. If launchers share the proxy, terminal notices stay suppressed until the proxy restarts so one terminal cannot show another session's finding. The log contains only metadata, not skill or conversation text. Completion checks make additional TypeSafe calls only for sessions where a full skill body was identified.
 
+If launchers from different projects share a proxy, shadow mode observes user skills only. It skips project skills because the proxy cannot reliably assign each request to a project.
+
 ## Settings
 
 Settings are in `.env` in this folder. The useful ones:

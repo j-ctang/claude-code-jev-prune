@@ -35,6 +35,13 @@ function normalize(text: string): string {
   return text.replace(/\r\n/g, "\n").trim();
 }
 
+/** Project skills are observable only when every live launcher shares one project. */
+export function skillRootsForProjects(userRoot: string, projects: readonly string[]): string[] {
+  return projects.length === 1
+    ? [userRoot, join(projects[0]!, ".claude", "skills")]
+    : [userRoot];
+}
+
 function bodyOf(raw: string): string {
   const text = normalize(raw);
   if (!text.startsWith("---\n")) return text;

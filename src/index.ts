@@ -7,7 +7,7 @@ import { JevService } from "./services/jevService.js";
 import { createFileStateStore } from "./services/pruneState.js";
 import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
-import { SkillShadow } from "./services/skillShadow.js";
+import { SkillShadow, skillRootsForProjects } from "./services/skillShadow.js";
 import { SkillCompletionJudge } from "./services/skillCompletion.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -50,15 +50,10 @@ function start(config: Config, logger: ReturnType<typeof createLogger>): void {
     ...(config.skillShadow
       ? {
           shadow: new SkillShadow({
-            roots: () => [
-              join(
-                process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"),
-                "skills",
-              ),
-              ...readSessionProjects(sessionsDirectory(config.port)).map(
-                (project) => join(project, ".claude", "skills"),
-              ),
-            ],
+            roots: () => skillRootsForProjects(
+              join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "skills"),
+              readSessionProjects(sessionsDirectory(config.port)),
+            ),
             judge: (goal, reply) => completionJudge!.score(goal, reply),
           }),
         }

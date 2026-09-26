@@ -1,13 +1,17 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { SkillShadow } from "../src/services/skillShadow.js";
+import { SkillShadow, skillRootsForProjects } from "../src/services/skillShadow.js";
 import type { AnthropicRequest } from "../src/types.js";
 
 const body =
   "Follow this detailed skill procedure when creating the report. Check every page, record any layout defect, and rerender before delivery.";
 
 describe("SkillShadow", () => {
+  test("uses project skills only when the owning project is unambiguous", () => {
+    expect(skillRootsForProjects("/user/skills", ["/project-a"])).toEqual(["/user/skills", "/project-a/.claude/skills"]);
+    expect(skillRootsForProjects("/user/skills", ["/project-a", "/project-b"])).toEqual(["/user/skills"]);
+  });
   const root = mkdtempSync(join(tmpdir(), "skill-shadow-"));
   beforeAll(() => {
     mkdirSync(join(root, "pdf"), { recursive: true });
