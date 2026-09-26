@@ -7,6 +7,7 @@ import {
 } from "./middleware/proxy.js";
 import type { ProxyStats } from "./types.js";
 import type { AppLogger } from "./utils/logger.js";
+import type { SkillShadow } from "./services/skillShadow.js";
 import { VERSION } from "./version.js";
 
 interface AppDependencies {
@@ -18,6 +19,7 @@ interface AppDependencies {
   stats?: ProxyStats;
   version?: string;
   upstreamSignal?: AbortSignal;
+  shadow?: SkillShadow;
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -50,6 +52,7 @@ export function createApp(dependencies: AppDependencies): Express {
       fetchFn: dependencies.fetchFn,
       logger: dependencies.logger,
       stats,
+      ...(dependencies.shadow ? { shadow: dependencies.shadow } : {}),
       ...(dependencies.upstreamSignal
         ? { upstreamSignal: dependencies.upstreamSignal }
         : {}),

@@ -47,4 +47,13 @@ describe("SkillShadow", () => {
     ]);
     expect(await high.complete("s", "Finished the report.")).toEqual([]);
   });
+
+  test("refreshes skill roots supplied by active launchers", () => {
+    let roots: string[] = [];
+    const shadow = new SkillShadow({ roots: () => roots, judge: async () => 1 });
+    const request: AnthropicRequest = { messages: [{ role: "user", content: body }] };
+    expect(shadow.observe(request, "s")).toEqual([]);
+    roots = [root];
+    expect(shadow.observe(request, "s")).toEqual([expect.objectContaining({ skill: "pdf" })]);
+  });
 });

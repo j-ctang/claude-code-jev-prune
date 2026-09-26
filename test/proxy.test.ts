@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -10,6 +11,7 @@ import type { Config } from "../src/config.js";
 import { createApp } from "../src/app.js";
 import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
+import { SkillShadow } from "../src/services/skillShadow.js";
 import type {
   AnthropicRequest,
   ProxyStats,
@@ -89,6 +91,7 @@ function testConfig(
     trimMinTokens: 10_000,
     trimKeepTokens: 2_000,
     notify: false,
+    skillShadow: false,
     keepRecent: 0,
     excludeTools: new Set(),
     debug: false,
@@ -113,6 +116,7 @@ function appFor(
   scorer: RelevanceScorer,
   overrides: Partial<Config> = {},
   logger: AppLogger = silentLogger,
+  shadow?: SkillShadow,
 ) {
   const config = testConfig(upstreamUrl, overrides);
   const pruner = new ContextPruner({ config, scorer });
@@ -122,6 +126,7 @@ function appFor(
     fetchFn: fetch,
     logger,
     startedAt: Date.now() - 42_000,
+    ...(shadow ? { shadow } : {}),
   });
 }
 
@@ -130,6 +135,32 @@ afterEach(async () => {
 });
 
 describe("Anthropic proxy", () => {
+  test("shadow mode observes a skill without changing the forwarded request", async () => {
+    const root = mkdtempSync(join(tmpdir(), "shadow-proxy-"));
+    const skillBody = "Follow this lengthy procedure to make the report. Check each page, record every finding, and verify the final artifact before delivering it.";
+    mkdirSync(join(root, "report"));
+    writeFileSync(join(root, "report", "SKILL.md"), `---\nname: report\n---\n${skillBody}`);
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ stop_reason: "end_turn", content: [{ type: "text", text: "Report complete." }] }));
+    });
+    const events: string[] = [];
+    const logger: AppLogger = { ...silentLogger, info: (message) => { events.push(message); } };
+    const shadow = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    const body = { messages: [{ role: "user", content: `Create a report.\n${skillBody}` }] };
+    try {
+      await request(appFor(upstream.url, { score: async () => new Map() }, { skillShadow: true }, logger, shadow))
+        .post("/v1/messages")
+        .set("x-claude-code-session-id", "session-a")
+        .send(body)
+        .expect(200);
+      expect(upstream.requests[0]?.body).toEqual(body);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toContain("skill_shadow_complete");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   test("adds pruning notices to the user turn only when notices are on", async () => {
     const upstream = await startUpstream((_incoming, response) => {
       response.writeHead(200, { "content-type": "application/json" });

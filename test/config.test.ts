@@ -118,6 +118,7 @@ describe("loadConfig", () => {
 
   test("enables opt-in skill observation", () => {
     expect(loadConfig({ TYPESAFE_API_KEY: "secret", JEV_PRUNE_SKILL_SHADOW: "true" }).skillShadow).toBe(true);
+    expect(() => loadConfig({ JEV_PRUNE_ENABLED: "false", JEV_PRUNE_SKILL_SHADOW: "true" })).toThrow("TYPESAFE_API_KEY is required when skill shadow mode is enabled");
   });
 
   test("normalizes comma-separated excluded tools", () => {

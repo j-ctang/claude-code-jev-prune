@@ -24,7 +24,7 @@ interface SessionState {
 }
 
 interface SkillShadowOptions {
-  roots: readonly string[];
+  roots: readonly string[] | (() => readonly string[]);
   judge: (goal: string, reply: string) => Promise<number>;
 }
 
@@ -100,7 +100,7 @@ export class SkillShadow {
   observe(request: AnthropicRequest, sessionId: string): SkillFinding[] {
     if (!sessionId) return [];
     const text = requestText(request);
-    const entries = skillEntries(this.options.roots);
+    const entries = skillEntries(typeof this.options.roots === "function" ? this.options.roots() : this.options.roots);
     const matched = entries.filter((entry) => text.includes(entry.body));
     const byBody = new Map<string, SkillEntry[]>();
     for (const entry of matched) {

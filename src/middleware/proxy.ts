@@ -10,6 +10,9 @@ import { CanaryPolicy } from "../services/canary.js";
 import type { PruneOptions } from "../services/contextPruner.js";
 import { recordPruneOutcome } from "../services/pruneLog.js";
 import { appendNotice } from "../services/turn.js";
+import type { SkillShadow } from "../services/skillShadow.js";
+import { createResponseTextTap } from "../utils/responseTextTap.js";
+import { randomUUID } from "node:crypto";
 
 interface RequestPruner {
   prune(
@@ -27,6 +30,7 @@ export interface ProxyDependencies {
   logger: AppLogger;
   stats: ProxyStats;
   upstreamSignal?: AbortSignal;
+  shadow?: SkillShadow;
 }
 
 const REQUEST_HEADER_BLOCKLIST = new Set([
@@ -122,6 +126,7 @@ async function forward(
 ): Promise<void> {
   dependencies.stats.requests += 1;
   let body = request.body as unknown;
+  let shadowSessionId: string | undefined;
   const path = request.originalUrl.split("?", 1)[0];
 
   if (
@@ -131,6 +136,16 @@ async function forward(
   ) {
     const startedAt = Date.now();
     const sessionId = request.get(SESSION_HEADER);
+    if (dependencies.config.skillShadow && dependencies.shadow && sessionId) {
+      shadowSessionId = sessionId;
+      for (const finding of dependencies.shadow.observe(body, sessionId)) {
+        dependencies.logger.info("skill_shadow_observed", {
+          sessionId,
+          skill: finding.skill,
+          potentialTokens: finding.potentialTokens,
+        });
+      }
+    }
     const canary = canaryPolicy.check(body, sessionId);
     const result = await dependencies.pruner.prune(body, {
       ...(sessionId ? { sessionId } : {}),
@@ -203,7 +218,28 @@ async function forward(
         });
       },
     );
-    await pipeline(stream, tap, response);
+    if (upstream.ok && shadowSessionId && dependencies.shadow) {
+      const sessionId = shadowSessionId;
+      const responseTap = createResponseTextTap(
+        upstream.headers.get("content-type") ?? "",
+        (reply) => {
+          void dependencies.shadow?.complete(sessionId, reply).then((findings) => {
+            for (const finding of findings) {
+              dependencies.logger.info("skill_shadow_complete", {
+                eventId: randomUUID(),
+                sessionId,
+                skill: finding.skill,
+                potentialTokens: finding.potentialTokens,
+                confidence: finding.confidence,
+              });
+            }
+          }).catch(() => undefined);
+        },
+      );
+      await pipeline(stream, tap, responseTap, response);
+    } else {
+      await pipeline(stream, tap, response);
+    }
     return;
   }
   await pipeline(stream, response);

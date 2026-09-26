@@ -41,7 +41,7 @@ async function main(): Promise<void> {
   const config = loadConfig(process.env);
 
   const sessions = sessionsDirectory(proxy.port);
-  registerSession(sessions, process.pid);
+  registerSession(sessions, process.pid, project);
   let stopWatching = () => {};
   try {
     const running = await proxy.probe();
