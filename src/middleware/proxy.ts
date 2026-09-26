@@ -108,6 +108,15 @@ function copyResponseHeaders(
   });
 }
 
+/** Adds `beta` to the `anthropic-beta` list unless Claude Code sent it. */
+function addBeta(headers: Headers, beta: string): void {
+  const current = headers.get("anthropic-beta");
+  const betas = current ? current.split(",").map((name) => name.trim()) : [];
+  if (!betas.includes(beta)) {
+    headers.set("anthropic-beta", [...betas, beta].join(","));
+  }
+}
+
 async function forward(
   request: Request,
   response: Response,
@@ -118,19 +127,21 @@ async function forward(
   const path = request.originalUrl.split("?", 1)[0];
   const headers = requestHeaders(request);
   const canHaveBody = request.method !== "GET" && request.method !== "HEAD";
-  const send = (payload: unknown) => {
+  const send = (payload: unknown, beta?: string) => {
     const serializedBody =
       canHaveBody && payload !== undefined
         ? JSON.stringify(payload)
         : undefined;
+    const outgoing = new Headers(headers);
     if (serializedBody !== undefined) {
-      headers.set("content-type", "application/json");
+      outgoing.set("content-type", "application/json");
     }
+    if (beta) addBeta(outgoing, beta);
     return dependencies.fetchFn(
       `${dependencies.config.anthropicUpstreamUrl}${request.originalUrl}`,
       {
         method: request.method,
-        headers,
+        headers: outgoing,
         ...(serializedBody !== undefined ? { body: serializedBody } : {}),
         ...(dependencies.upstreamSignal
           ? { signal: dependencies.upstreamSignal }

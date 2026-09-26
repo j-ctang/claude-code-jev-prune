@@ -25,7 +25,28 @@ export interface RequestRouter {
 
 export type SendRequest = (
   request: AnthropicRequest,
+  beta?: string,
 ) => Promise<globalThis.Response>;
+
+/**
+ * Preserved thinking is bound to the history and model it was made with.
+ * Pruning, notices, and routing change those, which a newer account's API
+ * rejects with a 400. This beta and `drop_block` make the API drop only the
+ * thinking that no longer matches instead.
+ */
+export const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
+
+function allowEditedHistory(request: AnthropicRequest): AnthropicRequest {
+  const { thinking } = request;
+  if (typeof thinking !== "object" || thinking === null) return request;
+  return {
+    ...request,
+    thinking: {
+      ...thinking,
+      block_binding: { prefix_mismatch_behavior: "drop_block" },
+    },
+  };
+}
 
 export interface PreparedMessage {
   /** Sends the request, resending on the original model if routing asks. */
@@ -85,24 +106,30 @@ export class MessagePreparer {
           )
         : result.request;
     const unrouted = [result.notice, canary.notice];
-    const routed = {
-      ...withNotices(...unrouted, route.notice),
-      ...(route.model ? { model: route.model } : {}),
-    };
+    const noticed = withNotices(...unrouted, route.notice);
+    const routed = route.model ? { ...noticed, model: route.model } : noticed;
     const { fallback } = route;
     const { shadowObserver } = this.dependencies;
     const onFinalReply =
       config.skillShadow && shadowObserver && sessionId
         ? shadowObserver.observe(result.request, sessionId)
         : undefined;
+    // Only a request jev-prune changed can mismatch its thinking.
+    const sendChanged = (send: SendRequest, body: AnthropicRequest) =>
+      body === request
+        ? send(body)
+        : send(allowEditedHistory(body), THINKING_BINDING_BETA);
     return {
       onFinalReply,
       async send(send) {
-        const upstream = await send(routed);
+        const upstream = await sendChanged(send, routed);
         if (!fallback?.retries(upstream.status)) return upstream;
         await upstream.body?.cancel();
         logger.warn("route_retry", { status: upstream.status });
-        const retried = await send(withNotices(...unrouted, fallback.notice));
+        const retried = await sendChanged(
+          send,
+          withNotices(...unrouted, fallback.notice),
+        );
         if (retried.ok) fallback.confirm();
         return retried;
       },

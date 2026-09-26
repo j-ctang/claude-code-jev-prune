@@ -821,6 +821,31 @@ describe("Anthropic proxy", () => {
     );
   });
 
+  test("adds the thinking-binding beta once to a changed request", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const app = await serve(appWithRouter(upstream.url, hardRouter()));
+
+    await request(app)
+      .post("/v1/messages")
+      .set("anthropic-beta", "claude-code-20250219")
+      .send(routedRequest);
+    await request(app)
+      .post("/v1/messages")
+      .set(
+        "anthropic-beta",
+        "claude-code-20250219,thinking-binding-controls-2026-08-01",
+      )
+      .send(routedRequest);
+
+    expect(upstream.requests.map((sent) => sent.headers["anthropic-beta"])).toEqual([
+      "claude-code-20250219,thinking-binding-controls-2026-08-01",
+      "claude-code-20250219,thinking-binding-controls-2026-08-01",
+    ]);
+  });
+
   test("resends on the original model when the routed model is rejected", async () => {
     const upstream = await startUpstream((incoming, response) => {
       const model = (incoming.body as AnthropicRequest).model;

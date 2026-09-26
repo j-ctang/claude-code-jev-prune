@@ -1,5 +1,6 @@
 import {
   MessagePreparer,
+  THINKING_BINDING_BETA,
   type RequestRouter,
 } from "../src/services/messagePreparer.js";
 import { identifyConversation } from "../src/services/conversation.js";
@@ -190,4 +191,29 @@ test("keeps an earlier turn's notice on later requests", async () => {
 
   expect(sent[1]?.messages[0]).toEqual(sent[0]?.messages[0]);
   expect(JSON.stringify(sent[1]?.messages[0])).toContain("Switched");
+});
+
+test("lets the API drop mismatched thinking only on requests it changed", async () => {
+  const thinking = { type: "adaptive", display: "omitted" };
+  const calls: Array<{ body: AnthropicRequest; beta?: string | undefined }> =
+    [];
+  const send = async (body: AnthropicRequest, beta?: string) => {
+    calls.push({ body, beta });
+    return response(200);
+  };
+  const untouched = preparer({ route: async () => ({}) }).subject;
+  const routed = preparer({
+    route: async () => ({ model: "claude-fable-5-1" }),
+  }).subject;
+
+  await (await untouched.prepare({ ...request, thinking }, main)).send(send);
+  await (await routed.prepare({ ...request, thinking }, main)).send(send);
+
+  expect(calls[0]?.beta).toBeUndefined();
+  expect(calls[0]?.body.thinking).toEqual(thinking);
+  expect(calls[1]?.beta).toBe(THINKING_BINDING_BETA);
+  expect(calls[1]?.body.thinking).toEqual({
+    ...thinking,
+    block_binding: { prefix_mismatch_behavior: "drop_block" },
+  });
 });
