@@ -44,7 +44,8 @@ Express application
 | `src/services/canary.ts` | Watch the response canary and handle `/jev-prune-auto` commands. |
 | `src/services/modelRouter.ts` | Decide per conversation whether to move a hard prompt to the hard model and back, and handle `/jev-route-*` commands. |
 | `src/services/routeMode.ts` | Save the `ask` / `auto` / `off` routing choice. |
-| `src/middleware/proxy.ts` | Forward headers/body, add notices for Claude, and stream upstream responses. |
+| `src/services/messagePreparer.ts` | Turn one `/v1/messages` request into what is sent: canary, prune and route, notices for Claude, and the routed-model fallback. |
+| `src/middleware/proxy.ts` | Forward headers/body and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
 | `src/utils/logger.ts` | Write redacted structured events to console and disk. |
 | `src/index.ts` | Compose dependencies, listen locally, and shut down gracefully. |

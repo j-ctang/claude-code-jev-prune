@@ -120,10 +120,13 @@ routed request gets an upstream 4xx response (400, 403, or 404) before any body
 is streamed:
 
 1. Discard the response body.
-2. Resend the same request with the original model.
-3. Mark the conversation as `unavailable`. It is never routed again.
-4. Add a notice: "[jev-prune] claude-fable-5-1 is not available on this account.
-   Staying on claude-opus-5-5."
+2. Resend the same request with the original model, with a notice:
+   "[jev-prune] claude-fable-5-1 rejected this request, so this conversation
+   stays on claude-opus-5-5."
+3. If the resend succeeds, the routed model caused the rejection: mark the
+   conversation as `unavailable`. It is never routed again.
+4. If the resend fails too, the request itself was bad (for example, "prompt
+   is too long"). Return that error and keep routing.
 
 The user always gets an answer, and never on a worse model than the one they
 chose.
@@ -160,7 +163,8 @@ For testing without Fable credit: `JEV_ROUTE_DEFAULT_MODEL=claude-sonnet-5` and
 | `src/services/routeMode.ts` | Load and save the `ask` / `auto` / `off` choice. |
 | `src/services/modelRouter.ts` | Keep per-conversation state, handle the route commands, call Jev, apply the policy table, and return the model to send plus an optional notice. |
 | `src/services/turn.ts` | Add `previousGoal` (the user text before the newest one) for the `continues` question. |
-| `src/middleware/proxy.ts` | Call the router after pruning, set `body.model`, append its notice, and run the unavailable-model fallback. |
+| `src/services/messagePreparer.ts` | Check the canary, prune and route at the same time, add every notice, and send with the router's fallback. |
+| `src/middleware/proxy.ts` | Hand `/v1/messages` requests to the preparer and stream the response. |
 | `commands/jev-route-auto.md`, `commands/jev-route-off.md` | Slash commands. The proxy recognizes them. |
 | `src/installation.ts` | Install the two new slash commands. |
 

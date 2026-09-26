@@ -93,7 +93,7 @@ describe("ModelRouter in auto mode", () => {
 
     expect(first.model).toBe(HARD);
     expect(first.notice).toContain(`Switched this conversation to ${HARD}`);
-    expect(loop).toEqual({ conversation: first.conversation, model: HARD });
+    expect(loop).toEqual({ model: HARD, fallback: expect.any(Object) });
   });
 
   test("a follow-up stays up and a new easy task switches down", async () => {
@@ -144,9 +144,7 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    expect(await subject.route(turn(["Rename a variable"]), "s")).toEqual({
-      conversation: conversationKey(turn(["Rename a variable"]), "s"),
-    });
+    expect(await subject.route(turn(["Rename a variable"]), "s")).toEqual({});
   });
 
   test("a Jev failure keeps the current model", async () => {
@@ -222,7 +220,7 @@ describe("ModelRouter in auto mode", () => {
     const next = await subject.route(loop, "s");
 
     expect(first.model).toBe(HARD);
-    expect(next).toEqual({ conversation: first.conversation, model: HARD });
+    expect(next).toEqual({ model: HARD, fallback: expect.any(Object) });
   });
 
   test("a subagent on the default model still routes", async () => {
@@ -246,21 +244,52 @@ describe("ModelRouter in auto mode", () => {
     );
   });
 
-  test("an unavailable hard model is never routed again", async () => {
+  test("retries only statuses the routed model may have caused", async () => {
+    const { router: subject } = await router(
+      scriptedAsker({ hard: 0.9, continues: 0 }),
+      "auto",
+    );
+
+    const { fallback } = await subject.route(turn(["Redesign auth"]), "s");
+
+    expect([400, 403, 404].map((status) => fallback?.retries(status))).toEqual(
+      [true, true, true],
+    );
+    expect([401, 429, 500].map((status) => fallback?.retries(status))).toEqual(
+      [false, false, false],
+    );
+    expect(fallback?.notice).toContain(`${HARD} rejected this request`);
+  });
+
+  test("a confirmed rejection stops routing the conversation", async () => {
     const { router: subject } = await router(
       scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.9, continues: 0 }),
       "auto",
     );
 
     const first = await subject.route(turn(["Redesign auth"]), "s");
-    const notice = subject.markUnavailable(first.conversation ?? "");
+    first.fallback?.confirm();
     const next = await subject.route(
       turn(["Redesign auth", "Redesign billing"]),
       "s",
     );
 
-    expect(notice).toContain(`${HARD} is not available on this account`);
-    expect(next.model).toBeUndefined();
+    expect(next).toEqual({});
+  });
+
+  test("an unconfirmed rejection keeps routing", async () => {
+    const { router: subject } = await router(
+      scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.9, continues: 0 }),
+      "auto",
+    );
+
+    await subject.route(turn(["Redesign auth"]), "s");
+    const next = await subject.route(
+      turn(["Redesign auth", "Redesign billing"]),
+      "s",
+    );
+
+    expect(next.model).toBe(HARD);
   });
 });
 
@@ -375,7 +404,6 @@ describe("ModelRouter in ask mode", () => {
     );
 
     expect(accepted).toEqual({
-      conversation: conversationKey(turn(["Redesign auth"]), "s"),
       notice: "[jev-prune] Could not save the model routing setting.",
     });
   });
@@ -415,9 +443,7 @@ describe("ModelRouter in ask mode", () => {
     const other = await subject.route(turn(["Redesign billing"]), "t");
 
     expect(main.notice).toContain("/jev-route-auto");
-    expect(subagent).toEqual({
-      conversation: conversationKey(turn(["Audit every module"]), "s"),
-    });
+    expect(subagent).toEqual({});
     expect(other.notice).toContain("/jev-route-auto");
   });
 

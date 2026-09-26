@@ -10,8 +10,23 @@ export interface RouteDecision {
   model?: string;
   /** Text to show Claude on this request. */
   notice?: string;
-  /** Conversation this decision belongs to, for markUnavailable. */
-  conversation?: string;
+  /** Set with `model`: what to do if the upstream rejects the routed model. */
+  fallback?: RouteFallback;
+}
+
+export interface RouteFallback {
+  /** Whether this upstream status means resend on the original model. */
+  retries(status: number): boolean;
+  /** Text to show Claude on the resend. */
+  notice: string;
+  /** The resend succeeded, so the routed model can't take this conversation. */
+  confirm(): void;
+}
+
+interface CommandResult {
+  choice: "auto" | "off";
+  saved: boolean;
+  notice: string;
 }
 
 type RouterConfig = Pick<
@@ -31,6 +46,8 @@ interface ConversationState {
   askedHard: boolean;
 }
 
+/** Statuses where the routed model may be what the upstream rejected. */
+const RETRY_STATUSES = new Set([400, 403, 404]);
 const MAX_CONVERSATIONS = 500;
 const MAX_REPLY_CHARS = 4_000;
 const CONTINUES_THRESHOLD = 0.5;
@@ -102,27 +119,26 @@ export class ModelRouter {
     sessionId?: string,
   ): Promise<RouteDecision> {
     const turn = readTurn(request);
-    const commandNotice = this.applyCommand(turn.command);
+    const command = this.applyCommand(turn.command);
     if (this.mode.choice === "off" || !this.eligible(request)) {
-      return commandNotice ? { notice: commandNotice } : {};
+      return command ? { notice: command.notice } : {};
     }
     const conversation = conversationKey(request, sessionId);
     const main = this.isMain(conversation, sessionId);
     const state = this.stateFor(conversation);
-    if (state.unavailable)
-      return this.decision(conversation, state, commandNotice);
-
-    // A skipped routing question expires once the user sends anything else.
-    if (turn.newUserTurn && turn.command !== "jev-route-auto") {
-      state.askedHard = false;
+    if (state.unavailable || !turn.newUserTurn) {
+      return this.decision(conversation, state, command?.notice);
     }
-    // A failed save keeps the question pending and the model unchanged.
-    if (
-      turn.command === "jev-route-auto" &&
-      state.askedHard &&
-      commandNotice !== SAVE_FAILED_NOTICE
-    ) {
-      state.askedHard = false;
+
+    // A routing question expires once the user sends anything else.
+    const asked = state.askedHard;
+    state.askedHard = false;
+    if (asked && command?.choice === "auto") {
+      // A failed save keeps the question pending and the model unchanged.
+      if (!command.saved) {
+        state.askedHard = true;
+        return this.decision(conversation, state, command.notice);
+      }
       this.switchTo(state, conversation, this.config.routeHardModel, "opt-in");
       return this.decision(
         conversation,
@@ -132,22 +148,14 @@ export class ModelRouter {
     }
     // With notices off, ask mode can never ask, so Jev is not needed.
     const silentAsk = this.mode.choice === "ask" && !this.config.notify;
-    if (turn.newUserTurn && !turn.command && !silentAsk) {
-      return this.decision(
-        conversation,
-        state,
-        await this.decide(turn, state, conversation, main),
-      );
+    if (turn.command || silentAsk) {
+      return this.decision(conversation, state, command?.notice);
     }
-    return this.decision(conversation, state, commandNotice);
-  }
-
-  /** Stops routing a conversation whose hard model the upstream rejected. */
-  markUnavailable(conversation: string): string {
-    const state = this.stateFor(conversation);
-    state.model = this.config.routeDefaultModel;
-    state.unavailable = true;
-    return `[jev-prune] ${this.config.routeHardModel} is not available on this account. Staying on ${this.config.routeDefaultModel}. Tell the user in one short line.`;
+    return this.decision(
+      conversation,
+      state,
+      await this.decide(turn, state, conversation, main),
+    );
   }
 
   private async decide(
@@ -230,7 +238,7 @@ export class ModelRouter {
     state.model = model;
   }
 
-  private applyCommand(command: string | undefined): string | undefined {
+  private applyCommand(command: string | undefined): CommandResult | undefined {
     if (command !== "jev-route-auto" && command !== "jev-route-off") {
       return undefined;
     }
@@ -241,9 +249,13 @@ export class ModelRouter {
       this.logger.warn("route_mode_save_failed", {
         error: error instanceof Error ? error.name : "unknown error",
       });
-      return SAVE_FAILED_NOTICE;
+      return { choice, saved: false, notice: SAVE_FAILED_NOTICE };
     }
-    return choice === "auto" ? AUTO_ON_NOTICE : OFF_NOTICE;
+    return {
+      choice,
+      saved: true,
+      notice: choice === "auto" ? AUTO_ON_NOTICE : OFF_NOTICE,
+    };
   }
 
   private eligible(request: AnthropicRequest): boolean {
@@ -289,12 +301,35 @@ export class ModelRouter {
     state: ConversationState,
     notice: string | undefined,
   ): RouteDecision {
+    const routed = state.model !== this.config.routeDefaultModel;
     return {
-      conversation,
-      ...(state.model === this.config.routeDefaultModel
-        ? {}
-        : { model: state.model }),
+      ...(routed
+        ? { model: state.model, fallback: this.fallback(conversation, state) }
+        : {}),
       ...(notice ? { notice } : {}),
+    };
+  }
+
+  /**
+   * Any 400 is retried, since the routed model may be the cause. Only a
+   * retry that succeeds proves it was, so only that stops routing.
+   */
+  private fallback(
+    conversation: string,
+    state: ConversationState,
+  ): RouteFallback {
+    const { routeDefaultModel, routeHardModel } = this.config;
+    return {
+      retries: (status) => RETRY_STATUSES.has(status),
+      notice: `[jev-prune] ${routeHardModel} rejected this request, so this conversation stays on ${routeDefaultModel}. Tell the user in one short line.`,
+      confirm: () => {
+        this.logger.warn("route_model_unavailable", {
+          conversation,
+          model: routeHardModel,
+        });
+        state.model = routeDefaultModel;
+        state.unavailable = true;
+      },
     };
   }
 }

@@ -15,7 +15,7 @@ import request from "supertest";
 import type { Config } from "../src/config.js";
 import { createApp } from "../src/app.js";
 import { PruneError } from "../src/errors.js";
-import type { RequestRouter } from "../src/middleware/proxy.js";
+import type { RequestRouter } from "../src/services/messagePreparer.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import type {
   AnthropicRequest,
@@ -174,17 +174,17 @@ function appWithRouter(upstreamUrl: string, router: RequestRouter) {
   });
 }
 
-const hardRouter = (unavailable: string[] = []): RequestRouter => ({
+const hardRouter = (confirmed: string[] = []): RequestRouter => ({
   async route() {
     return {
-      conversation: "s:abc",
       model: "claude-fable-5-1",
       notice: "[jev-prune] Switched.",
+      fallback: {
+        retries: (status) => status === 400 || status === 404,
+        notice: "[jev-prune] Not available.",
+        confirm: () => confirmed.push("s:abc"),
+      },
     };
-  },
-  markUnavailable(conversation) {
-    unavailable.push(conversation);
-    return "[jev-prune] Not available.";
   },
 });
 
@@ -760,10 +760,10 @@ describe("Anthropic proxy", () => {
       });
       response.end(JSON.stringify({ model }));
     });
-    const unavailable: string[] = [];
+    const confirmed: string[] = [];
 
     const response = await request(
-      await serve(appWithRouter(upstream.url, hardRouter(unavailable))),
+      await serve(appWithRouter(upstream.url, hardRouter(confirmed))),
     )
       .post("/v1/messages")
       .send(routedRequest);
@@ -779,7 +779,7 @@ describe("Anthropic proxy", () => {
     expect(JSON.stringify(retried.messages.at(-1))).not.toContain(
       "[jev-prune] Switched.",
     );
-    expect(unavailable).toEqual(["s:abc"]);
+    expect(confirmed).toEqual(["s:abc"]);
   });
 
   test("returns the retry's error unchanged when the default model also fails", async () => {
@@ -787,9 +787,10 @@ describe("Anthropic proxy", () => {
       response.writeHead(400, { "content-type": "application/json" });
       response.end(JSON.stringify({ error: "prompt is too long" }));
     });
+    const confirmed: string[] = [];
 
     const response = await request(
-      await serve(appWithRouter(upstream.url, hardRouter())),
+      await serve(appWithRouter(upstream.url, hardRouter(confirmed))),
     )
       .post("/v1/messages")
       .send(routedRequest);
@@ -797,6 +798,7 @@ describe("Anthropic proxy", () => {
     expect(response.status).toBe(400);
     expect(response.body).toEqual({ error: "prompt is too long" });
     expect(upstream.requests).toHaveLength(2);
+    expect(confirmed).toEqual([]);
   });
 
   test("forwards unrouted when the router fails", async () => {
@@ -808,7 +810,6 @@ describe("Anthropic proxy", () => {
       async route() {
         throw new Error("router broke");
       },
-      markUnavailable: () => "",
     };
 
     const response = await request(
@@ -830,9 +831,8 @@ describe("Anthropic proxy", () => {
     });
     const router: RequestRouter = {
       async route() {
-        return { conversation: "s:abc" };
+        return {};
       },
-      markUnavailable: () => "",
     };
 
     await request(
