@@ -6,16 +6,14 @@ import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
 import { ModelRouter, routeChoice } from "./services/modelRouter.js";
 import { createFileStateStore } from "./services/pruneState.js";
+import { JevRelevanceScorer } from "./services/relevanceScorer.js";
 import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 
-function start(
-  config: Config,
-  logger: ReturnType<typeof createLogger>,
-): void {
-  const scorer = new JevService({
+function start(config: Config, logger: ReturnType<typeof createLogger>): void {
+  const jev = new JevService({
     apiKey: config.jevApiKey ?? "disabled",
     baseUrl: config.jevBaseUrl,
     model: config.jevModel,
@@ -24,18 +22,13 @@ function start(
   });
   const pruner = new ContextPruner({
     config,
-    scorer,
+    scorer: new JevRelevanceScorer(jev),
     logger,
     stateStore: createFileStateStore(config.statePath),
   });
   // Routing needs Jev; without a key every request keeps its model.
   const router = config.jevApiKey
-    ? new ModelRouter(
-        config,
-        scorer,
-        routeChoice(config.statePath),
-        logger,
-      )
+    ? new ModelRouter(config, jev, routeChoice(config.statePath), logger)
     : undefined;
   const upstreamAbort = new AbortController();
   const app = createApp({

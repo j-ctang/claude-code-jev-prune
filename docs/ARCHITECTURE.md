@@ -35,7 +35,8 @@ Express application
 | Component | Responsibility |
 | --- | --- |
 | `src/config.ts` | Parse and validate every environment variable. |
-| `src/services/jevService.ts` | Build TypeSafe requests, batch questions, enforce timeout, and validate answers. |
+| `src/services/jevService.ts` | Send noul questions to TypeSafe, enforce the timeout and question limit, and validate answers. |
+| `src/services/relevanceScorer.ts` | Ask Jev whether each tool call is still needed, in batches of 32. |
 | `src/services/contextPruner.ts` | Run the pruning pipeline: re-apply saved decisions, gate, rewrite, score, render. |
 | `src/services/decisionMemory.ts` | Remember drop, keep, and rewrite decisions; persist them across restarts. |
 | `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and remove or rewrite them immutably. |

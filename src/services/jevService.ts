@@ -1,12 +1,8 @@
 import { PruneError } from "../errors.js";
-import type {
-  NoulAsker,
-  NoulQuestion,
-  RelevanceScorer,
-  ToolCandidate,
-} from "../types.js";
+import type { NoulAsker, NoulQuestion } from "../types.js";
 
-const MAX_QUESTIONS_PER_REQUEST = 32;
+/** TypeSafe answers at most this many questions per request. */
+export const MAX_QUESTIONS_PER_REQUEST = 32;
 
 interface JevServiceOptions {
   apiKey: string;
@@ -21,7 +17,8 @@ interface NoulAnswer {
   noul: number;
 }
 
-export class JevService implements RelevanceScorer, NoulAsker {
+/** The TypeSafe client: sends noul questions and validates the answers. */
+export class JevService implements NoulAsker {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly model: string;
@@ -34,28 +31,6 @@ export class JevService implements RelevanceScorer, NoulAsker {
     this.model = options.model;
     this.timeoutMs = options.timeoutMs;
     this.fetchFn = options.fetchFn;
-  }
-
-  async score(
-    goal: string,
-    candidates: readonly ToolCandidate[],
-  ): Promise<ReadonlyMap<string, number>> {
-    const scores = new Map<string, number>();
-    for (
-      let offset = 0;
-      offset < candidates.length;
-      offset += MAX_QUESTIONS_PER_REQUEST
-    ) {
-      const batch = candidates.slice(
-        offset,
-        offset + MAX_QUESTIONS_PER_REQUEST,
-      );
-      const batchScores = await this.scoreBatch(goal, batch);
-      for (const [toolUseId, score] of batchScores) {
-        scores.set(toolUseId, score);
-      }
-    }
-    return scores;
   }
 
   /** Sends named noul questions about `state` and returns each answer by name. */
@@ -88,7 +63,9 @@ export class JevService implements RelevanceScorer, NoulAsker {
     });
 
     if (!response.ok) {
-      throw new PruneError(`TypeSafe request failed with status ${response.status}`);
+      throw new PruneError(
+        `TypeSafe request failed with status ${response.status}`,
+      );
     }
 
     const payload: unknown = await response.json();
@@ -100,43 +77,6 @@ export class JevService implements RelevanceScorer, NoulAsker {
         throw new PruneError(`TypeSafe returned an invalid answer for ${key}`);
       }
       scores.set(key, answer.noul);
-    }
-    return scores;
-  }
-
-  private async scoreBatch(
-    goal: string,
-    batch: readonly ToolCandidate[],
-  ): Promise<ReadonlyMap<string, number>> {
-    const answers = await this.ask(
-      {
-        current_goal: goal,
-        candidates: batch.map((candidate, index) => ({
-          key: `candidate_${index}`,
-          tool_use_id: candidate.toolUseId,
-          tool_name: candidate.toolName,
-          input: candidate.input,
-          result: candidate.result,
-        })),
-      },
-      Object.fromEntries(
-        batch.map((_candidate, index) => [
-          `candidate_${index}`,
-          {
-            instructions: `Is candidates[${index}] still needed to complete current_goal?`,
-            criteria: {
-              true: "The current task depends on this tool input or result.",
-              false:
-                "The tool call is stale, superseded, exploratory, or unrelated to the current task.",
-            },
-          },
-        ]),
-      ),
-    );
-    const scores = new Map<string, number>();
-    for (const [index, candidate] of batch.entries()) {
-      const score = answers.get(`candidate_${index}`);
-      if (score !== undefined) scores.set(candidate.toolUseId, score);
     }
     return scores;
   }
