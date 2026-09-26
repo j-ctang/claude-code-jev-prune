@@ -78,6 +78,26 @@ const OFF_NOTICE =
 const SAVE_FAILED_NOTICE =
   "[jev-prune] Could not save the model routing setting.";
 
+type SwitchReason =
+  | { reason: "opt-in" }
+  | { reason: "hard" | "new-easy-task"; hard: number; continues: number };
+
+/**
+ * The routing policy on one new prompt. Up on a hard prompt. While up, stay
+ * for follow-ups and hard prompts; go down only for a new, easy task.
+ */
+export function nextMove(
+  up: boolean,
+  { hard, continues }: { hard: number; continues: number },
+  thresholds: Pick<Config, "routeUpThreshold" | "routeDownThreshold">,
+): "up" | "down" | "stay" {
+  if (!up) return hard >= thresholds.routeUpThreshold ? "up" : "stay";
+  return continues < CONTINUES_THRESHOLD &&
+    hard <= thresholds.routeDownThreshold
+    ? "down"
+    : "stay";
+}
+
 /**
  * A subagent shares its parent's session header but not its first message.
  * Only the first message's text is hashed: Claude Code moves `cache_control`
@@ -139,7 +159,9 @@ export class ModelRouter {
         state.askedHard = true;
         return this.decision(conversation, state, command.notice);
       }
-      this.switchTo(state, conversation, this.config.routeHardModel, "opt-in");
+      this.switchTo(state, conversation, this.config.routeHardModel, {
+        reason: "opt-in",
+      });
       return this.decision(
         conversation,
         state,
@@ -182,38 +204,31 @@ export class ModelRouter {
     }
     const hard = scores.get("hard") ?? 0;
     const continues = scores.get("continues") ?? 0;
-    const up = state.model === this.config.routeHardModel;
-
-    if (!up && hard >= this.config.routeUpThreshold) {
-      if (this.mode.choice === "ask") {
-        // Only the main thread can reach the user; subagents stay put.
-        if (!this.config.notify || !main) return undefined;
-        state.askedHard = true;
-        return `[jev-prune] This prompt looks hard. Do not start it yet. In one short line, tell the user that jev-prune can move hard prompts to ${this.config.routeHardModel} automatically, and ask them to run /jev-route-auto to turn it on or /jev-route-off to keep the current model.`;
-      }
-      this.switchTo(
-        state,
-        conversation,
-        this.config.routeHardModel,
-        "hard",
+    const move = nextMove(
+      state.model === this.config.routeHardModel,
+      { hard, continues },
+      this.config,
+    );
+    if (move === "up" && this.mode.choice === "ask") {
+      // Only the main thread can reach the user; subagents stay put.
+      if (!this.config.notify || !main) return undefined;
+      state.askedHard = true;
+      return `[jev-prune] This prompt looks hard. Do not start it yet. In one short line, tell the user that jev-prune can move hard prompts to ${this.config.routeHardModel} automatically, and ask them to run /jev-route-auto to turn it on or /jev-route-off to keep the current model.`;
+    }
+    if (move === "up") {
+      this.switchTo(state, conversation, this.config.routeHardModel, {
+        reason: "hard",
         hard,
         continues,
-      );
+      });
       return `[jev-prune] Switched this conversation to ${this.config.routeHardModel} for a hard prompt. Tell the user in one short line.`;
     }
-    if (
-      up &&
-      continues < CONTINUES_THRESHOLD &&
-      hard <= this.config.routeDownThreshold
-    ) {
-      this.switchTo(
-        state,
-        conversation,
-        this.config.routeDefaultModel,
-        "new-easy-task",
+    if (move === "down") {
+      this.switchTo(state, conversation, this.config.routeDefaultModel, {
+        reason: "new-easy-task",
         hard,
         continues,
-      );
+      });
       return `[jev-prune] Switched this conversation back to ${this.config.routeDefaultModel} for a new, simpler task. Tell the user in one short line.`;
     }
     return undefined;
@@ -223,17 +238,13 @@ export class ModelRouter {
     state: ConversationState,
     conversation: string,
     model: string,
-    reason: string,
-    hard?: number,
-    continues?: number,
+    why: SwitchReason,
   ): void {
     this.logger.info("model_route", {
       conversation,
       from: state.model,
       to: model,
-      reason,
-      ...(hard === undefined ? {} : { hard }),
-      ...(continues === undefined ? {} : { continues }),
+      ...why,
     });
     state.model = model;
   }

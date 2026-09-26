@@ -1,7 +1,11 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { conversationKey, ModelRouter } from "../src/services/modelRouter.js";
+import {
+  conversationKey,
+  ModelRouter,
+  nextMove,
+} from "../src/services/modelRouter.js";
 import { RouteMode } from "../src/services/routeMode.js";
 import type { AnthropicRequest, Message, NoulAsker } from "../src/types.js";
 import type { AppLogger } from "../src/utils/logger.js";
@@ -80,6 +84,23 @@ async function router(asker: NoulAsker, choice?: "auto" | "off") {
   if (choice) mode.set(choice);
   return { router: new ModelRouter(config, asker, mode, silentLogger), path };
 }
+
+describe("nextMove", () => {
+  test.each([
+    [false, 0.7, 0, "up"],
+    [false, 0.69, 0, "stay"],
+    [false, 0.9, 1, "up"],
+    [true, 0.4, 0.49, "down"],
+    [true, 0.41, 0, "stay"],
+    [true, 0.1, 0.5, "stay"],
+    [true, 0.9, 0, "stay"],
+  ] as const)(
+    "up=%s hard=%s continues=%s moves %s",
+    (up, hard, continues, move) => {
+      expect(nextMove(up, { hard, continues }, config)).toBe(move);
+    },
+  );
+});
 
 describe("ModelRouter in auto mode", () => {
   test("switches up on a hard prompt and keeps the model in the tool loop", async () => {
