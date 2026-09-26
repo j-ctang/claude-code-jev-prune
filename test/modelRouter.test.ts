@@ -2,10 +2,10 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  conversationKey,
-  ModelRouter,
-  nextMove,
-} from "../src/services/modelRouter.js";
+  identifyConversation,
+  type Conversation,
+} from "../src/services/conversation.js";
+import { ModelRouter, nextMove } from "../src/services/modelRouter.js";
 import { RouteMode } from "../src/services/routeMode.js";
 import type { AnthropicRequest, Message, NoulAsker } from "../src/types.js";
 import type { AppLogger } from "../src/utils/logger.js";
@@ -78,6 +78,10 @@ function toolLoop(texts: string[]): AnthropicRequest {
 
 const command = (name: string) => `<command-name>/${name}</command-name>`;
 
+/** The main thread of `session`, or one of its subagents. */
+const thread = (session = "s", agent?: string): Conversation =>
+  identifyConversation(turn([]), session, agent);
+
 async function router(asker: NoulAsker, choice?: "auto" | "off") {
   const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "mode.json");
   const mode = new RouteMode(path);
@@ -109,8 +113,8 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    const first = await subject.route(turn(["Redesign auth"]), "s");
-    const loop = await subject.route(toolLoop(["Redesign auth"]), "s");
+    const first = await subject.route(turn(["Redesign auth"]), thread());
+    const loop = await subject.route(toolLoop(["Redesign auth"]), thread());
 
     expect(first.model).toBe(HARD);
     expect(first.notice).toContain(`Switched this conversation to ${HARD}`);
@@ -127,14 +131,14 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
     const followUp = await subject.route(
       turn(["Redesign auth", "Now the error case"]),
-      "s",
+      thread(),
     );
     const newTask = await subject.route(
       turn(["Redesign auth", "Now the error case", "Fix a typo in README"]),
-      "s",
+      thread(),
     );
 
     expect(followUp.model).toBe(HARD);
@@ -149,10 +153,10 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
     const next = await subject.route(
       turn(["Redesign auth", "Redesign billing"]),
-      "s",
+      thread(),
     );
 
     expect(next.model).toBe(HARD);
@@ -165,7 +169,9 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    expect(await subject.route(turn(["Rename a variable"]), "s")).toEqual({});
+    expect(await subject.route(turn(["Rename a variable"]), thread())).toEqual(
+      {},
+    );
   });
 
   test("a Jev failure keeps the current model", async () => {
@@ -174,8 +180,11 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
-    const next = await subject.route(turn(["Redesign auth", "Fix typo"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
+    const next = await subject.route(
+      turn(["Redesign auth", "Fix typo"]),
+      thread(),
+    );
 
     expect(next.model).toBe(HARD);
     expect(next.notice).toBeUndefined();
@@ -186,12 +195,15 @@ describe("ModelRouter in auto mode", () => {
     const { router: subject } = await router(asker, "auto");
 
     expect(
-      await subject.route(turn(["Hard"], { model: "claude-haiku-4-5" }), "s"),
+      await subject.route(
+        turn(["Hard"], { model: "claude-haiku-4-5" }),
+        thread(),
+      ),
     ).toEqual({});
     expect(
       await subject.route(
         turn(["Hard"], { tool_choice: { type: "tool", name: "Read" } }),
-        "s",
+        thread(),
       ),
     ).toEqual({});
     expect(asker.calls).toBe(0);
@@ -203,45 +215,15 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
-    const subagent = await subject.route(turn(["Find the config file"]), "s");
-    const main = await subject.route(toolLoop(["Redesign auth"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
+    const subagent = await subject.route(
+      turn(["Find the config file"]),
+      thread("s", "a1"),
+    );
+    const main = await subject.route(toolLoop(["Redesign auth"]), thread());
 
     expect(subagent.model).toBeUndefined();
     expect(main.model).toBe(HARD);
-  });
-
-  test("cache_control on the first message does not change the key", async () => {
-    const { router: subject } = await router(
-      scriptedAsker({ hard: 0.9, continues: 0 }),
-      "auto",
-    );
-    const cached = {
-      model: DEFAULT,
-      messages: [
-        {
-          role: "user",
-          content: [
-            {
-              type: "text",
-              text: "Redesign auth",
-              cache_control: { type: "ephemeral" },
-            },
-          ],
-        },
-      ],
-    } as AnthropicRequest;
-    const loop = toolLoop(["Redesign auth"]);
-    loop.messages[0] = {
-      role: "user",
-      content: [{ type: "text", text: "Redesign auth" }],
-    };
-
-    const first = await subject.route(cached, "s");
-    const next = await subject.route(loop, "s");
-
-    expect(first.model).toBe(HARD);
-    expect(next).toEqual({ model: HARD, fallback: expect.any(Object) });
   });
 
   test("a subagent on the default model still routes", async () => {
@@ -250,19 +232,44 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    await subject.route(turn(["Rename a variable"]), "s");
-    const subagent = await subject.route(turn(["Audit every module"]), "s");
+    await subject.route(turn(["Rename a variable"]), thread());
+    const subagent = await subject.route(
+      turn(["Audit every module"]),
+      thread("s", "a1"),
+    );
 
     expect(subagent.model).toBe(HARD);
   });
 
-  test("a new first message starts a new conversation", () => {
-    expect(conversationKey(turn(["A", "B"]), "s")).toBe(
-      conversationKey(turn(["A", "C"]), "s"),
+  test("/compact keeps the conversation's model", async () => {
+    const { router: subject } = await router(
+      scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.2, continues: 0.9 }),
+      "auto",
     );
-    expect(conversationKey(turn(["Summary of A"]), "s")).not.toBe(
-      conversationKey(turn(["A"]), "s"),
+
+    await subject.route(turn(["Redesign auth"]), thread());
+    const compacted = await subject.route(
+      turn([
+        "This session is being continued from a previous conversation.",
+        "Add tests",
+      ]),
+      thread(),
     );
+
+    expect(compacted).toEqual({ model: HARD, fallback: expect.any(Object) });
+  });
+
+  test("skips Claude Code's session setup request", async () => {
+    const asker = scriptedAsker({ hard: 0.9, continues: 0 });
+    const { router: subject } = await router(asker, "auto");
+
+    const setup = await subject.route(
+      turn(["<session>\nRedesign auth"], { tools: [] }),
+      thread(),
+    );
+
+    expect(setup).toEqual({});
+    expect(asker.calls).toBe(0);
   });
 
   test("retries only statuses the routed model may have caused", async () => {
@@ -271,14 +278,18 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    const { fallback } = await subject.route(turn(["Redesign auth"]), "s");
+    const { fallback } = await subject.route(turn(["Redesign auth"]), thread());
 
-    expect([400, 403, 404].map((status) => fallback?.retries(status))).toEqual(
-      [true, true, true],
-    );
-    expect([401, 429, 500].map((status) => fallback?.retries(status))).toEqual(
-      [false, false, false],
-    );
+    expect([400, 403, 404].map((status) => fallback?.retries(status))).toEqual([
+      true,
+      true,
+      true,
+    ]);
+    expect([401, 429, 500].map((status) => fallback?.retries(status))).toEqual([
+      false,
+      false,
+      false,
+    ]);
     expect(fallback?.notice).toContain(`${HARD} rejected this request`);
   });
 
@@ -288,11 +299,11 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    const first = await subject.route(turn(["Redesign auth"]), "s");
+    const first = await subject.route(turn(["Redesign auth"]), thread());
     first.fallback?.confirm();
     const next = await subject.route(
       turn(["Redesign auth", "Redesign billing"]),
-      "s",
+      thread(),
     );
 
     expect(next).toEqual({});
@@ -304,10 +315,10 @@ describe("ModelRouter in auto mode", () => {
       "auto",
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
     const next = await subject.route(
       turn(["Redesign auth", "Redesign billing"]),
-      "s",
+      thread(),
     );
 
     expect(next.model).toBe(HARD);
@@ -327,45 +338,13 @@ describe("ModelRouter memory", () => {
       2,
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
-    await subject.route(turn(["Find the config file"]), "s");
-    await subject.route(toolLoop(["Redesign auth"]), "s");
-    await subject.route(turn(["List the tests"]), "s");
-    const loop = await subject.route(toolLoop(["Redesign auth"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
+    await subject.route(turn(["Find the config file"]), thread("s", "a1"));
+    await subject.route(toolLoop(["Redesign auth"]), thread());
+    await subject.route(turn(["List the tests"]), thread("s", "a2"));
+    const loop = await subject.route(toolLoop(["Redesign auth"]), thread());
 
     expect(loop.model).toBe(HARD);
-  });
-
-  test("forgets the least recently used session's main conversation", async () => {
-    const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
-    const hardWhenAsked: NoulAsker = {
-      async ask(state) {
-        const hard = String(state.newest_request).startsWith("Hard") ? 0.9 : 0;
-        return new Map([
-          ["hard", hard],
-          ["continues", 0],
-        ]);
-      },
-    };
-    const subject = new ModelRouter(
-      config,
-      hardWhenAsked,
-      new RouteMode(path),
-      silentLogger,
-      2,
-    );
-
-    await subject.route(turn(["Main one"]), "s1");
-    await subject.route(turn(["Main two"]), "s2");
-    await subject.route(turn(["Main one", "More"]), "s1");
-    await subject.route(turn(["Main three"]), "s3");
-    const kept = await subject.route(turn(["Hard subagent task"]), "s1");
-    await subject.route(turn(["Main four"]), "s4");
-    await subject.route(turn(["Main five"]), "s5");
-    const forgotten = await subject.route(turn(["Hard new task"]), "s1");
-
-    expect(kept.notice).toBeUndefined();
-    expect(forgotten.notice).toContain("/jev-route-auto");
   });
 });
 
@@ -375,10 +354,10 @@ describe("ModelRouter in ask mode", () => {
       scriptedAsker({ hard: 0.9, continues: 0 }),
     );
 
-    const asked = await subject.route(turn(["Redesign auth"]), "s");
+    const asked = await subject.route(turn(["Redesign auth"]), thread());
     const accepted = await subject.route(
       turn(["Redesign auth", command("jev-route-auto")]),
-      "s",
+      thread(),
     );
 
     expect(asked.model).toBeUndefined();
@@ -393,11 +372,11 @@ describe("ModelRouter in ask mode", () => {
       scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.1, continues: 0 }),
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
-    await subject.route(turn(["Redesign auth", "Fix a typo"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
+    await subject.route(turn(["Redesign auth", "Fix a typo"]), thread());
     const later = await subject.route(
       turn(["Redesign auth", "Fix a typo", command("jev-route-auto")]),
-      "s",
+      thread(),
     );
 
     expect(later.model).toBeUndefined();
@@ -418,10 +397,10 @@ describe("ModelRouter in ask mode", () => {
       silentLogger,
     );
 
-    await subject.route(turn(["Redesign auth"]), "s");
+    await subject.route(turn(["Redesign auth"]), thread());
     const accepted = await subject.route(
       turn(["Redesign auth", command("jev-route-auto")]),
-      "s",
+      thread(),
     );
 
     expect(accepted).toEqual({
@@ -432,7 +411,10 @@ describe("ModelRouter in ask mode", () => {
   test("/jev-route-auto with nothing pending only saves the choice", async () => {
     const { router: subject } = await router(scriptedAsker());
 
-    const result = await subject.route(turn([command("jev-route-auto")]), "s");
+    const result = await subject.route(
+      turn([command("jev-route-auto")]),
+      thread(),
+    );
 
     expect(result.model).toBeUndefined();
     expect(result.notice).toContain("Automatic model routing is on");
@@ -442,8 +424,8 @@ describe("ModelRouter in ask mode", () => {
     const asker = scriptedAsker({ hard: 0.9, continues: 0 });
     const { router: subject, path } = await router(asker);
 
-    const off = await subject.route(turn([command("jev-route-off")]), "s");
-    const later = await subject.route(turn(["x", "Redesign auth"]), "s");
+    const off = await subject.route(turn([command("jev-route-off")]), thread());
+    const later = await subject.route(turn(["x", "Redesign auth"]), thread());
 
     expect(off.notice).toContain("Automatic model routing is off");
     expect(later).toEqual({});
@@ -459,24 +441,16 @@ describe("ModelRouter in ask mode", () => {
     );
     const { router: subject } = await router(asker);
 
-    const main = await subject.route(turn(["Redesign auth"]), "s");
-    const subagent = await subject.route(turn(["Audit every module"]), "s");
-    const other = await subject.route(turn(["Redesign billing"]), "t");
+    const main = await subject.route(turn(["Redesign auth"]), thread());
+    const subagent = await subject.route(
+      turn(["Audit every module"]),
+      thread("s", "a1"),
+    );
+    const other = await subject.route(turn(["Redesign billing"]), thread("t"));
 
     expect(main.notice).toContain("/jev-route-auto");
     expect(subagent).toEqual({});
     expect(other.notice).toContain("/jev-route-auto");
-  });
-
-  test("a request without a session is its own main conversation", async () => {
-    const { router: subject } = await router(
-      scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.9, continues: 0 }),
-    );
-
-    await subject.route(turn(["Redesign auth"]));
-    const next = await subject.route(turn(["Redesign billing"]));
-
-    expect(next.notice).toContain("/jev-route-auto");
   });
 
   test("does not ask or call Jev when notices are off", async () => {
@@ -489,7 +463,7 @@ describe("ModelRouter in ask mode", () => {
       silentLogger,
     );
 
-    const result = await subject.route(turn(["Redesign auth"]), "s");
+    const result = await subject.route(turn(["Redesign auth"]), thread());
 
     expect(result.model).toBeUndefined();
     expect(result.notice).toBeUndefined();

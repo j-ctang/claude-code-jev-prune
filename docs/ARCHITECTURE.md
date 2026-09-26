@@ -41,13 +41,15 @@ Express application
 | `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and remove or rewrite them immutably. |
 | `src/services/toolRewrites.ts` | Stub superseded Reads and trim large outputs without calling Jev. |
 | `src/services/turn.ts` | Read the latest turn: new user turn, goal, slash command, last reply. |
-| `src/services/canary.ts` | Watch the response canary and handle `/jev-prune-auto` commands. |
+| `src/services/canary.ts` | Watch the main thread's response canary and handle `/jev-prune-auto` commands. |
+| `src/services/conversation.ts` | Tell the main thread from subagents by header and key each thread. |
 | `src/services/modelRouter.ts` | Decide per conversation whether to move a hard prompt to the hard model and back, and handle `/jev-route-*` commands. |
 | `src/services/routeMode.ts` | Save the `ask` / `auto` / `off` routing choice. |
 | `src/services/messagePreparer.ts` | Turn one `/v1/messages` request into what is sent: canary, prune and route, notices for Claude, and the routed-model fallback. |
 | `src/middleware/proxy.ts` | Forward headers/body and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
 | `src/utils/logger.ts` | Write redacted structured events to console and disk. |
+| `src/utils/recency.ts` | Bounded least-recently-used insert shared by in-memory maps. |
 | `src/index.ts` | Compose dependencies, listen locally, and shut down gracefully. |
 | `jev-prune` | Install, build, and run setup when needed, then launch. |
 | `src/setup.ts` | Save the TypeSafe key and canary choice; install slash commands. |

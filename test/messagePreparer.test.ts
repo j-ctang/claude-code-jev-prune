@@ -2,6 +2,7 @@ import {
   MessagePreparer,
   type RequestRouter,
 } from "../src/services/messagePreparer.js";
+import { identifyConversation } from "../src/services/conversation.js";
 import type { AnthropicRequest, ProxyStats } from "../src/types.js";
 import type { AppLogger } from "../src/utils/logger.js";
 
@@ -9,6 +10,8 @@ const request: AnthropicRequest = {
   model: "claude-opus-5-5",
   messages: [{ role: "user", content: "Redesign auth" }],
 };
+
+const main = identifyConversation(request, "s");
 
 const sleep = (ms: number) =>
   new Promise((resolve) => {
@@ -54,7 +57,10 @@ function preparer(router: RequestRouter, pruneMs = 0) {
 }
 
 const response = (status: number) =>
-  new Response("{}", { status, headers: { "content-type": "application/json" } });
+  new Response("{}", {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 
 test("times the prune without the routing wait", async () => {
   const { subject, events } = preparer({
@@ -64,7 +70,7 @@ test("times the prune without the routing wait", async () => {
     },
   });
 
-  await subject.prepare(request, "s");
+  await subject.prepare(request, main);
 
   const complete = events.find((event) => event.message === "prune_complete");
   expect(complete?.metadata?.durationMs).toBeLessThan(150);
@@ -82,7 +88,7 @@ test("prunes and routes at the same time", async () => {
   );
 
   const startedAt = Date.now();
-  await subject.prepare(request, "s");
+  await subject.prepare(request, main);
 
   expect(Date.now() - startedAt).toBeLessThan(280);
 });
@@ -108,11 +114,11 @@ test("confirms a rejection only when the resend succeeds", async () => {
     return response(statuses.shift() ?? 500);
   };
 
-  const failed = await (await preparer(router).subject.prepare(request)).send(
-    send,
-  );
+  const failed = await (
+    await preparer(router).subject.prepare(request, main)
+  ).send(send);
   const recovered = await (
-    await preparer(router).subject.prepare(request)
+    await preparer(router).subject.prepare(request, main)
   ).send(send);
 
   expect(failed.status).toBe(400);
@@ -142,7 +148,9 @@ test("does not resend a status the router keeps", async () => {
     },
   });
 
-  const upstream = await (await subject.prepare(request)).send(async () => {
+  const upstream = await (
+    await subject.prepare(request, main)
+  ).send(async () => {
     sends += 1;
     return response(429);
   });

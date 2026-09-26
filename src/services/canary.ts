@@ -2,6 +2,7 @@ import type { Config } from "../config.js";
 import type { AnthropicRequest } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { CanaryMode, canaryModePath } from "./canaryMode.js";
+import type { Conversation } from "./conversation.js";
 import { readTurn, type Turn } from "./turn.js";
 
 interface CanaryState {
@@ -65,10 +66,16 @@ export class CanaryPolicy {
     );
   }
 
-  check(request: AnthropicRequest, sessionId?: string): CanaryDecision {
+  /** Watches only the main thread: subagents don't follow the user's prefix. */
+  check(request: AnthropicRequest, conversation: Conversation): CanaryDecision {
     const turn = readTurn(request);
     const commandNotice = this.applyCommand(turn.command);
-    const missed = Boolean(sessionId && this.monitor.observe(sessionId, turn));
+    const { sessionId } = conversation;
+    const missed = Boolean(
+      sessionId &&
+      conversation.main &&
+      this.monitor.observe(conversation.key, turn),
+    );
     if (missed && this.mode.autoPrune) {
       this.logger.warn("canary_prune_requested", { sessionId });
       return { prune: true, notice: commandNotice };

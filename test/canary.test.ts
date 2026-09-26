@@ -1,4 +1,8 @@
-import { CanaryMonitor } from "../src/services/canary.js";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CanaryMonitor, CanaryPolicy } from "../src/services/canary.js";
+import { identifyConversation } from "../src/services/conversation.js";
 import { readTurn } from "../src/services/turn.js";
 import type { AnthropicRequest } from "../src/types.js";
 
@@ -66,4 +70,25 @@ test("checks a completed reply when hook context follows the user turn", () => {
   second.messages.push({ role: "system", content: "hook context" });
   expect(observe(monitor, "s", first)).toBe(false);
   expect(observe(monitor, "s", second)).toBe(true);
+});
+
+test("subagent replies never count as canary misses", async () => {
+  const statePath = join(await mkdtemp(join(tmpdir(), "jev-canary-")), "s");
+  const logger = {
+    info: () => undefined,
+    warn: () => undefined,
+    error: () => undefined,
+    debug: () => undefined,
+  };
+  const policy = new CanaryPolicy({ canaryPrefix: "OK:", statePath }, logger);
+  const main = identifyConversation(turn("x"), "s");
+  const subagent = identifyConversation(turn("x"), "s", "a1");
+
+  policy.check(turn("OK: one"), main);
+  policy.check(turn("sub one"), subagent);
+  policy.check(turn("sub two"), subagent);
+  const next = policy.check(turn("OK: two"), main);
+
+  expect(next.notice).toBeUndefined();
+  expect(policy.check(turn("sub three"), subagent).notice).toBeUndefined();
 });

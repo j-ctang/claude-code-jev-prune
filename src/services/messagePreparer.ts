@@ -2,6 +2,7 @@ import type { Config } from "../config.js";
 import type { AnthropicRequest, PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import type { CanaryPolicy } from "./canary.js";
+import type { Conversation } from "./conversation.js";
 import type { PruneOptions } from "./contextPruner.js";
 import type { RouteDecision } from "./modelRouter.js";
 import { recordPruneOutcome } from "./pruneLog.js";
@@ -15,7 +16,10 @@ export interface RequestPruner {
 }
 
 export interface RequestRouter {
-  route(request: AnthropicRequest, sessionId?: string): Promise<RouteDecision>;
+  route(
+    request: AnthropicRequest,
+    conversation: Conversation,
+  ): Promise<RouteDecision>;
 }
 
 export type SendRequest = (
@@ -45,17 +49,18 @@ export class MessagePreparer {
 
   async prepare(
     request: AnthropicRequest,
-    sessionId?: string,
+    conversation: Conversation,
   ): Promise<PreparedMessage> {
     const { canary: canaryPolicy, config, logger, stats } = this.dependencies;
-    const canary = canaryPolicy.check(request, sessionId);
+    const canary = canaryPolicy.check(request, conversation);
+    const { sessionId } = conversation;
     // Pruning and routing both read the original request, so they run together.
     const [{ result, durationMs }, route] = await Promise.all([
       this.prune(request, {
         ...(sessionId ? { sessionId } : {}),
         ...(canary.prune ? { trigger: "canary" as const } : {}),
       }),
-      this.route(request, sessionId),
+      this.route(request, conversation),
     ]);
     recordPruneOutcome(result, {
       stats,
@@ -103,11 +108,11 @@ export class MessagePreparer {
   /** Routing never fails a request: on error, forward with no route. */
   private async route(
     request: AnthropicRequest,
-    sessionId: string | undefined,
+    conversation: Conversation,
   ): Promise<RouteDecision> {
     if (!this.dependencies.router) return {};
     try {
-      return await this.dependencies.router.route(request, sessionId);
+      return await this.dependencies.router.route(request, conversation);
     } catch (error) {
       this.dependencies.logger.warn("route_fail_open", {
         error: error instanceof Error ? error.message : "unknown error",

@@ -106,8 +106,12 @@ A request is eligible only when all are true:
   forced tool choice, so the router never moves such a request.
 
 Routing state is kept per **conversation**, not per Claude Code session. A
-subagent shares its parent's session header but has its own message history. The
-conversation key is the session header plus a hash of the first user message.
+subagent shares its parent's session header but sends its own
+`x-claude-code-agent-id` header; the main thread never sends one. The
+conversation key is the session header plus the agent ID, or `main`, so it
+survives `/compact`. Without a session header, the key is a hash of the first
+user message's text. Claude Code's session setup request (no tools, prompt
+wrapped in `<session>`) is never routed.
 
 State is in memory. A proxy restart forgets it; the next request then uses
 whatever model Claude Code sends, which is the default model. Restarts are rare

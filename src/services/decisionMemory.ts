@@ -3,21 +3,10 @@ import { loggableReason } from "../errors.js";
 import type { ToolCandidate } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import type { PruneStateStore, Rewrite } from "./pruneState.js";
+import { remember } from "../utils/recency.js";
 import { trimOutput } from "./toolRewrites.js";
 
 const MAX_TRACKED_SESSIONS = 1_000;
-
-/** Inserts or refreshes `key` as most recent, evicting the oldest past `max`. */
-function remember<V>(map: Map<string, V>, key: string, value: V, max: number) {
-  if (max <= 0) return;
-  map.delete(key);
-  map.set(key, value);
-  while (map.size > max) {
-    const oldest = map.keys().next().value as string | undefined;
-    if (oldest === undefined) return;
-    map.delete(oldest);
-  }
-}
 
 function fingerprint(candidate: ToolCandidate): string {
   return createHash("sha256")

@@ -1,9 +1,10 @@
-import { createHash } from "node:crypto";
 import type { Config } from "../config.js";
 import type { AnthropicRequest, NoulAsker, NoulQuestion } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import type { RouteMode } from "./routeMode.js";
-import { messageText, readTurn, type Turn } from "./turn.js";
+import { remember } from "../utils/recency.js";
+import { isSideRequest, type Conversation } from "./conversation.js";
+import { readTurn, type Turn } from "./turn.js";
 
 export interface RouteDecision {
   /** Model to send upstream; set only when it differs from the request's. */
@@ -99,31 +100,12 @@ export function nextMove(
 }
 
 /**
- * A subagent shares its parent's session header but not its first message.
- * Only the first message's text is hashed: Claude Code moves `cache_control`
- * to the newest message, so other block fields change between requests.
- */
-export function conversationKey(
-  request: AnthropicRequest,
-  sessionId?: string,
-): string {
-  const first = request.messages.find((message) => message.role === "user");
-  const digest = createHash("sha256")
-    .update(first ? messageText(first) : "")
-    .digest("hex")
-    .slice(0, 16);
-  return `${sessionId ?? "no-session"}:${digest}`;
-}
-
-/**
  * Moves a conversation to the hard model on hard prompts and back to the
  * default model at the next easy, unrelated task. Decides only when the user
  * speaks, so the model never changes inside a tool loop.
  */
 export class ModelRouter {
   private readonly conversations = new Map<string, ConversationState>();
-  /** First conversation seen per session: the main thread, not a subagent. */
-  private readonly mainConversations = new Map<string, string>();
 
   constructor(
     private readonly config: RouterConfig,
@@ -136,15 +118,13 @@ export class ModelRouter {
 
   async route(
     request: AnthropicRequest,
-    sessionId?: string,
+    { key: conversation, main }: Conversation,
   ): Promise<RouteDecision> {
     const turn = readTurn(request);
     const command = this.applyCommand(turn.command);
     if (this.mode.choice === "off" || !this.eligible(request)) {
       return command ? { notice: command.notice } : {};
     }
-    const conversation = conversationKey(request, sessionId);
-    const main = this.isMain(conversation, sessionId);
     const state = this.stateFor(conversation);
     if (state.unavailable || !turn.newUserTurn) {
       return this.decision(conversation, state, command?.notice);
@@ -277,7 +257,11 @@ export class ModelRouter {
         choice !== null &&
         "type" in choice &&
         choice.type === "auto");
-    return request.model === this.config.routeDefaultModel && autoChoice;
+    return (
+      request.model === this.config.routeDefaultModel &&
+      autoChoice &&
+      !isSideRequest(request)
+    );
   }
 
   private stateFor(conversation: string): ConversationState {
@@ -286,25 +270,8 @@ export class ModelRouter {
       unavailable: false,
       askedHard: false,
     };
-    this.remember(this.conversations, conversation, state);
+    remember(this.conversations, conversation, state, this.maxConversations);
     return state;
-  }
-
-  private isMain(conversation: string, sessionId?: string): boolean {
-    if (sessionId === undefined) return true;
-    const main = this.mainConversations.get(sessionId) ?? conversation;
-    this.remember(this.mainConversations, sessionId, main);
-    return main === conversation;
-  }
-
-  /** Map order is recency: re-insert on use, drop the least recent. */
-  private remember<T>(map: Map<string, T>, key: string, value: T): void {
-    map.delete(key);
-    map.set(key, value);
-    if (map.size > this.maxConversations) {
-      const oldest = map.keys().next().value;
-      if (oldest !== undefined) map.delete(oldest);
-    }
   }
 
   private decision(

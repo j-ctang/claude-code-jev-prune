@@ -6,9 +6,12 @@ import type { Config } from "../config.js";
 import type { AnthropicRequest, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { createUsageTap } from "../utils/usageTap.js";
+import {
+  AGENT_HEADER,
+  identifyConversation,
+  SESSION_HEADER,
+} from "../services/conversation.js";
 import type { MessagePreparer } from "../services/messagePreparer.js";
-
-export const SESSION_HEADER = "x-claude-code-session-id";
 
 export interface ProxyDependencies {
   config: Config;
@@ -138,7 +141,14 @@ async function forward(
     request.method === "POST" &&
     path === "/v1/messages" &&
     isAnthropicRequest(body)
-      ? await dependencies.preparer.prepare(body, request.get(SESSION_HEADER))
+      ? await dependencies.preparer.prepare(
+          body,
+          identifyConversation(
+            body,
+            request.get(SESSION_HEADER),
+            request.get(AGENT_HEADER),
+          ),
+        )
       : undefined;
 
   let upstream: globalThis.Response;
@@ -185,17 +195,15 @@ export function createProxyHandler(
   dependencies: ProxyDependencies,
 ): RequestHandler {
   return (request: Request, response: Response, next: NextFunction) => {
-    void forward(request, response, dependencies).catch(
-      (error: unknown) => {
-        dependencies.logger.error("proxy_response_failed", {
-          error: error instanceof Error ? error.message : "unknown error",
-        });
-        if (response.headersSent) {
-          response.destroy(error instanceof Error ? error : undefined);
-          return;
-        }
-        next(error);
-      },
-    );
+    void forward(request, response, dependencies).catch((error: unknown) => {
+      dependencies.logger.error("proxy_response_failed", {
+        error: error instanceof Error ? error.message : "unknown error",
+      });
+      if (response.headersSent) {
+        response.destroy(error instanceof Error ? error : undefined);
+        return;
+      }
+      next(error);
+    });
   };
 }
