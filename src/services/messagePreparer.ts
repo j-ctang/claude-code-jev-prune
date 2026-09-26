@@ -36,16 +36,30 @@ export type SendRequest = (
  */
 export const THINKING_BINDING_BETA = "thinking-binding-controls-2026-08-01";
 
-function allowEditedHistory(request: AnthropicRequest): AnthropicRequest {
-  const { thinking } = request;
-  if (typeof thinking !== "object" || thinking === null) return request;
-  return {
-    ...request,
-    thinking: {
-      ...thinking,
-      block_binding: { prefix_mismatch_behavior: "drop_block" },
+/** Thinking types that make blocks the API can drop; `disabled` rejects the field. */
+const THINKING_TYPES = new Set(["adaptive", "enabled"]);
+
+/** Sends `body`, letting the API drop thinking an edit invalidated. */
+function sendEdited(
+  send: SendRequest,
+  body: AnthropicRequest,
+): Promise<globalThis.Response> {
+  const thinking =
+    typeof body.thinking === "object" && body.thinking !== null
+      ? (body.thinking as Record<string, unknown>)
+      : {};
+  const { type } = thinking;
+  if (typeof type !== "string" || !THINKING_TYPES.has(type)) return send(body);
+  return send(
+    {
+      ...body,
+      thinking: {
+        ...thinking,
+        block_binding: { prefix_mismatch_behavior: "drop_block" },
+      },
     },
-  };
+    THINKING_BINDING_BETA,
+  );
 }
 
 export interface PreparedMessage {
@@ -116,9 +130,7 @@ export class MessagePreparer {
         : undefined;
     // Only a request jev-prune changed can mismatch its thinking.
     const sendChanged = (send: SendRequest, body: AnthropicRequest) =>
-      body === request
-        ? send(body)
-        : send(allowEditedHistory(body), THINKING_BINDING_BETA);
+      body === request ? send(body) : sendEdited(send, body);
     return {
       onFinalReply,
       async send(send) {

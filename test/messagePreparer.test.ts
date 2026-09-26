@@ -217,3 +217,26 @@ test("lets the API drop mismatched thinking only on requests it changed", async 
     block_binding: { prefix_mismatch_behavior: "drop_block" },
   });
 });
+
+test("leaves a changed request alone when it has no thinking to drop", async () => {
+  const calls: Array<{ body: AnthropicRequest; beta?: string | undefined }> =
+    [];
+  const send = async (body: AnthropicRequest, beta?: string) => {
+    calls.push({ body, beta });
+    return response(200);
+  };
+  const routed = preparer({
+    route: async () => ({ model: "claude-sonnet-5" }),
+  }).subject;
+  const disabled = { type: "disabled" };
+
+  await (
+    await routed.prepare({ ...request, thinking: disabled }, main)
+  ).send(send);
+  await (await routed.prepare(request, main)).send(send);
+
+  // The API rejects `block_binding` beside disabled thinking with a 400.
+  expect(calls[0]?.body.thinking).toEqual(disabled);
+  expect(calls[1]?.body.thinking).toBeUndefined();
+  expect(calls.map((call) => call.beta)).toEqual([undefined, undefined]);
+});

@@ -827,18 +827,19 @@ describe("Anthropic proxy", () => {
       response.end("{}");
     });
     const app = await serve(appWithRouter(upstream.url, hardRouter()));
+    const thinking = { ...routedRequest, thinking: { type: "adaptive" } };
 
     await request(app)
       .post("/v1/messages")
       .set("anthropic-beta", "claude-code-20250219")
-      .send(routedRequest);
+      .send(thinking);
     await request(app)
       .post("/v1/messages")
       .set(
         "anthropic-beta",
         "claude-code-20250219,thinking-binding-controls-2026-08-01",
       )
-      .send(routedRequest);
+      .send(thinking);
 
     expect(upstream.requests.map((sent) => sent.headers["anthropic-beta"])).toEqual([
       "claude-code-20250219,thinking-binding-controls-2026-08-01",
