@@ -12,6 +12,7 @@ import { createApp } from "../src/app.js";
 import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import { SkillShadow } from "../src/services/skillShadow.js";
+import { SkillCatalog } from "../src/services/skillCatalog.js";
 import type {
   AnthropicRequest,
   ProxyStats,
@@ -147,7 +148,9 @@ describe("Anthropic proxy", () => {
     const messages: string[] = [];
     const logger: AppLogger = { ...silentLogger, info: (message) => { messages.push(message); } };
     const config = testConfig(upstream.url, { skillShadow: true });
-    const shadow = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    const catalog = new SkillCatalog({ roots: () => [root] });
+    await catalog.start();
+    const shadow = new SkillShadow({ catalog, judge: async () => 0.99 });
     const pruned = { messages: [{ role: "user" as const, content: "Create report." }] };
     try {
       await request(createApp({
@@ -175,7 +178,9 @@ describe("Anthropic proxy", () => {
     });
     const events: string[] = [];
     const logger: AppLogger = { ...silentLogger, info: (message) => { events.push(message); } };
-    const shadow = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    const catalog = new SkillCatalog({ roots: () => [root] });
+    await catalog.start();
+    const shadow = new SkillShadow({ catalog, judge: async () => 0.99 });
     const body = { messages: [{ role: "user", content: `Create a report.\n${skillBody}` }] };
     try {
       await request(appFor(upstream.url, { score: async () => new Map() }, { skillShadow: true }, logger, shadow))

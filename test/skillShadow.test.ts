@@ -2,10 +2,20 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { SkillShadow, skillRootsForProjects } from "../src/services/skillShadow.js";
+import { SkillCatalog } from "../src/services/skillCatalog.js";
 import type { AnthropicRequest } from "../src/types.js";
 
 const body =
   "Follow this detailed skill procedure when creating the report. Check every page, record any layout defect, and rerender before delivery.";
+
+async function shadowFor(
+  roots: readonly string[],
+  judge: (goal: string, reply: string) => Promise<number>,
+): Promise<SkillShadow> {
+  const catalog = new SkillCatalog({ roots: () => roots });
+  await catalog.start();
+  return new SkillShadow({ catalog, judge });
+}
 
 describe("SkillShadow", () => {
   test("uses project skills only when the owning project is unambiguous", () => {
@@ -22,8 +32,8 @@ describe("SkillShadow", () => {
   });
   afterAll(() => rmSync(root, { recursive: true, force: true }));
 
-  test("identifies full skill body in a request and deduplicates repeat appearances", () => {
-    const shadow = new SkillShadow({ roots: [root], judge: async () => 1 });
+  test("identifies full skill body in a request and deduplicates repeat appearances", async () => {
+    const shadow = await shadowFor([root], async () => 1);
     const request: AnthropicRequest = {
       messages: [{ role: "user", content: `Use the skill:\r\n${body}` }],
     };
@@ -36,17 +46,14 @@ describe("SkillShadow", () => {
     expect(shadow.observe(request, "session-a")).toEqual([]);
   });
 
-  test("skips unknown and ambiguous skill bodies", () => {
+  test("skips unknown and ambiguous skill bodies", async () => {
     const other = mkdtempSync(join(tmpdir(), "skill-shadow-duplicate-"));
     mkdirSync(join(other, "copy"));
     writeFileSync(
       join(other, "copy", "SKILL.md"),
       `---\nname: copy\n---\n${body}`,
     );
-    const shadow = new SkillShadow({
-      roots: [root, other],
-      judge: async () => 1,
-    });
+    const shadow = await shadowFor([root, other], async () => 1);
     expect(
       shadow.observe({ messages: [{ role: "user", content: body }] }, "s"),
     ).toEqual([]);
@@ -56,12 +63,12 @@ describe("SkillShadow", () => {
     rmSync(other, { recursive: true, force: true });
   });
 
-  test("deduplicates the same skill installed in two projects", () => {
+  test("deduplicates the same skill installed in two projects", async () => {
     const other = mkdtempSync(join(tmpdir(), "skill-shadow-same-"));
     mkdirSync(join(other, "pdf"));
     writeFileSync(join(other, "pdf", "SKILL.md"), `---\nname: pdf\n---\n${body}`);
     try {
-      const shadow = new SkillShadow({ roots: [root, other], judge: async () => 1 });
+      const shadow = await shadowFor([root, other], async () => 1);
       expect(shadow.observe({ messages: [{ role: "user", content: `Create report.\n${body}` }] }, "s")).toHaveLength(1);
     } finally { rmSync(other, { recursive: true, force: true }); }
   });
@@ -72,14 +79,14 @@ describe("SkillShadow", () => {
     mkdirSync(join(other, "pdf"));
     writeFileSync(join(other, "pdf", "SKILL.md"), `---\nname: pdf\n---\n${variant}`);
     try {
-      const shadow = new SkillShadow({ roots: [root, other], judge: async () => 0.99 });
+      const shadow = await shadowFor([root, other], async () => 0.99);
       expect(shadow.observe({ messages: [{ role: "user", content: `Create report.\n${body}\n${variant}` }] }, "s")).toHaveLength(2);
       expect(await shadow.complete("s", "Done.", shadow.revision("s"))).toHaveLength(2);
     } finally { rmSync(other, { recursive: true, force: true }); }
   });
 
   test("records only high-confidence task completion", async () => {
-    const low = new SkillShadow({ roots: [root], judge: async () => 0.8 });
+    const low = await shadowFor([root], async () => 0.8);
     low.observe(
       { messages: [{ role: "user", content: `Create report.\n${body}` }] },
       "s",
@@ -88,7 +95,7 @@ describe("SkillShadow", () => {
       await low.complete("s", "Finished the report.", low.revision("s")),
     ).toEqual([]);
 
-    const high = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    const high = await shadowFor([root], async () => 0.99);
     high.observe(
       { messages: [{ role: "user", content: `Create report.\n${body}` }] },
       "s",
@@ -101,17 +108,17 @@ describe("SkillShadow", () => {
     ).toEqual([]);
   });
 
-  test("refreshes skill roots supplied by active launchers", () => {
+  test("refreshes skill roots supplied by active launchers", async () => {
     let roots: string[] = [];
-    const shadow = new SkillShadow({
-      roots: () => roots,
-      judge: async () => 1,
-    });
+    const catalog = new SkillCatalog({ roots: () => roots });
+    await catalog.start();
+    const shadow = new SkillShadow({ catalog, judge: async () => 1 });
     const request: AnthropicRequest = {
       messages: [{ role: "user", content: body }],
     };
     expect(shadow.observe(request, "s")).toEqual([]);
     roots = [root];
+    await catalog.start();
     expect(shadow.observe(request, "s")).toEqual([
       expect.objectContaining({ skill: "pdf" }),
     ]);
@@ -119,12 +126,9 @@ describe("SkillShadow", () => {
 
   test("scores the user's task rather than an injected skill body", async () => {
     let scoredGoal = "";
-    const shadow = new SkillShadow({
-      roots: [root],
-      judge: async (goal) => {
+    const shadow = await shadowFor([root], async (goal) => {
         scoredGoal = goal;
         return 0.99;
-      },
     });
     shadow.observe(
       {
@@ -140,7 +144,7 @@ describe("SkillShadow", () => {
   });
 
   test("does not apply an old response to a newer task in the same session", async () => {
-    const shadow = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    const shadow = await shadowFor([root], async () => 0.99);
     shadow.observe(
       { messages: [{ role: "user", content: `Make report A.\n${body}` }] },
       "s",
@@ -157,13 +161,11 @@ describe("SkillShadow", () => {
 
   test("drops a completion result if the task changes while Jev is scoring", async () => {
     let answer!: (confidence: number) => void;
-    const shadow = new SkillShadow({
-      roots: [root],
-      judge: () =>
+    const shadow = await shadowFor([root], () =>
         new Promise<number>((resolve) => {
           answer = resolve;
         }),
-    });
+    );
     shadow.observe(
       { messages: [{ role: "user", content: `Make report A.\n${body}` }] },
       "s",
@@ -185,7 +187,7 @@ describe("SkillShadow", () => {
     let answer!: (confidence: number) => void;
     let calls = 0;
     const pending = new Promise<number>((resolve) => { answer = resolve; });
-    const shadow = new SkillShadow({ roots: [root], judge: () => { calls += 1; return pending; } });
+    const shadow = await shadowFor([root], () => { calls += 1; return pending; });
     shadow.observe({ messages: [{ role: "user", content: `Make report.\n${body}` }] }, "s");
     const revision = shadow.revision("s");
     const first = shadow.complete("s", "Done.", revision);
@@ -197,7 +199,7 @@ describe("SkillShadow", () => {
   });
 
   test("evicts old sessions from the persistent observer", async () => {
-    const shadow = new SkillShadow({ roots: [root], judge: async () => 0.99 });
+    const shadow = await shadowFor([root], async () => 0.99);
     shadow.observe({ messages: [{ role: "user", content: `Make report.\n${body}` }] }, "old");
     const revision = shadow.revision("old");
     for (let index = 0; index < 129; index += 1)

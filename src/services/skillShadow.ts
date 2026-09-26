@@ -1,7 +1,6 @@
-import { readdirSync, readFileSync, type Dirent } from "node:fs";
-import { createHash } from "node:crypto";
-import { basename, join } from "node:path";
+import { join } from "node:path";
 import type { AnthropicRequest } from "../types.js";
+import type { SkillCatalog } from "./skillCatalog.js";
 
 export interface SkillFinding {
   skill: string;
@@ -13,11 +12,6 @@ export interface SkillCompletion extends SkillFinding {
   sessionId: string;
 }
 
-interface SkillEntry extends SkillFinding {
-  body: string;
-  key: string;
-}
-
 interface SessionState {
   goal: string;
   revision: number;
@@ -27,7 +21,7 @@ interface SessionState {
 }
 
 interface SkillShadowOptions {
-  roots: readonly string[] | (() => readonly string[]);
+  catalog: Pick<SkillCatalog, "entries">;
   judge: (goal: string, reply: string) => Promise<number>;
 }
 
@@ -40,50 +34,6 @@ export function skillRootsForProjects(userRoot: string, projects: readonly strin
   return projects.length === 1
     ? [userRoot, join(projects[0]!, ".claude", "skills")]
     : [userRoot];
-}
-
-function bodyOf(raw: string): string {
-  const text = normalize(raw);
-  if (!text.startsWith("---\n")) return text;
-  const closing = text.indexOf("\n---\n", 4);
-  return closing < 0 ? text : text.slice(closing + 5).trim();
-}
-
-function filesIn(directory: string): string[] {
-  let entries: Dirent[];
-  try {
-    entries = readdirSync(directory, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const paths: string[] = [];
-  for (const entry of entries) {
-    const path = join(directory, entry.name);
-    if (entry.isDirectory()) paths.push(...filesIn(path));
-    else if (entry.isFile() && entry.name === "SKILL.md") paths.push(path);
-  }
-  return paths;
-}
-
-function skillEntries(roots: readonly string[]): SkillEntry[] {
-  const entries: SkillEntry[] = [];
-  for (const root of roots) {
-    for (const path of filesIn(root)) {
-      try {
-        const body = bodyOf(readFileSync(path, "utf8"));
-        if (body.length < 80) continue;
-        entries.push({
-          skill: basename(join(path, "..")),
-          body,
-          key: createHash("sha256").update(body).digest("hex"),
-          potentialTokens: Math.ceil(body.length / 4),
-        });
-      } catch {
-        // Inaccessible or changed skill files are not candidates.
-      }
-    }
-  }
-  return entries;
 }
 
 function requestText(request: AnthropicRequest): string {
@@ -142,16 +92,8 @@ export class SkillShadow {
   observe(request: AnthropicRequest, sessionId: string): SkillFinding[] {
     if (!sessionId) return [];
     const text = requestText(request);
-    const entries = skillEntries(
-      typeof this.options.roots === "function"
-        ? this.options.roots()
-        : this.options.roots,
-    );
+    const entries = this.options.catalog.entries();
     const matched = entries.filter((entry) => text.includes(entry.body));
-    const byBody = new Map<string, SkillEntry[]>();
-    for (const entry of matched) {
-      byBody.set(entry.body, [...(byBody.get(entry.body) ?? []), entry]);
-    }
     const goal = taskGoal(
       request,
       matched.map((entry) => entry.body),
@@ -177,14 +119,8 @@ export class SkillShadow {
     }
     this.sessions.set(sessionId, state);
     const findings: SkillFinding[] = [];
-    for (const group of byBody.values()) {
-      if (new Set(group.map((entry) => entry.skill)).size !== 1) continue;
-      const entry = group[0];
-      if (
-        !entry ||
-        state.active.has(entry.key) ||
-        state.completed.has(entry.key)
-      )
+    for (const entry of matched) {
+      if (state.active.has(entry.key) || state.completed.has(entry.key))
         continue;
       const finding = {
         skill: entry.skill,

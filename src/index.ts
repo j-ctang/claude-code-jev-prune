@@ -9,6 +9,7 @@ import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
 import { SkillShadow, skillRootsForProjects } from "./services/skillShadow.js";
 import { SkillCompletionJudge } from "./services/skillCompletion.js";
+import { SkillCatalog } from "./services/skillCatalog.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readSessionProjects } from "./sessions.js";
@@ -16,7 +17,7 @@ import { sessionsDirectory } from "./installation.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 
-function start(config: Config, logger: ReturnType<typeof createLogger>): void {
+async function start(config: Config, logger: ReturnType<typeof createLogger>): Promise<void> {
   const scorer = new JevService({
     apiKey: config.jevApiKey ?? "disabled",
     baseUrl: config.jevBaseUrl,
@@ -40,6 +41,15 @@ function start(config: Config, logger: ReturnType<typeof createLogger>): void {
         fetchFn: fetch,
       })
     : undefined;
+  const catalog = config.skillShadow
+    ? new SkillCatalog({
+        roots: () => skillRootsForProjects(
+          join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "skills"),
+          readSessionProjects(sessionsDirectory(config.port)),
+        ),
+      })
+    : undefined;
+  await catalog?.start();
   const app = createApp({
     config,
     pruner,
@@ -50,10 +60,7 @@ function start(config: Config, logger: ReturnType<typeof createLogger>): void {
     ...(config.skillShadow
       ? {
           shadow: new SkillShadow({
-            roots: () => skillRootsForProjects(
-              join(process.env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude"), "skills"),
-              readSessionProjects(sessionsDirectory(config.port)),
-            ),
+            catalog: catalog!,
             judge: (goal, reply) => completionJudge!.score(goal, reply),
           }),
         }
@@ -103,7 +110,13 @@ let logger: ReturnType<typeof createLogger> | undefined;
 try {
   const config = loadConfig(process.env);
   logger = createLogger({ level: config.debug ? "debug" : "info" });
-  start(config, logger);
+  void start(config, logger).catch((error: unknown) => {
+    logger?.error("proxy_startup_failed", {
+      error: error instanceof Error ? error.message : "unknown error",
+    });
+    process.exitCode = 1;
+    logger?.end();
+  });
 } catch (error) {
   const failureLogger = logger ?? createLogger();
   failureLogger.error("proxy_startup_failed", {
