@@ -86,3 +86,16 @@ test("resumes when a missing log appears", () => {
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("caps multibyte partial lines by bytes", () => {
+  const dir = mkdtempSync(join(tmpdir(), "shadow-tail-"));
+  const path = join(dir, "events.log");
+  try {
+    writeFileSync(path, "");
+    const follower = createSkillShadowLogFollower(path);
+    appendFileSync(path, `${event("too-large", "é".repeat(40_000))}\n${event("good")}\n`);
+    expect(follower.poll()).toEqual([expect.objectContaining({ eventId: "good" })]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

@@ -36,7 +36,7 @@ export function createSkillShadowLogFollower(path: string): { poll(): ShadowEven
     for (const [index, part] of parts.entries()) {
       if (!discard) {
         pending += part;
-        if (pending.length > MAX_LINE) {
+        if (Buffer.byteLength(pending, "utf8") > MAX_LINE) {
           pending = "";
           discard = true;
         }
