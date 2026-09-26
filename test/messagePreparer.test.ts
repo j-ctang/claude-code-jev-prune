@@ -63,35 +63,51 @@ const response = (status: number) =>
     headers: { "content-type": "application/json" },
   });
 
-test("times the prune without the routing wait", async () => {
-  const { subject, events } = preparer({
-    async route() {
-      await sleep(200);
-      return {};
-    },
+describe("with a fake clock", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
-  await subject.prepare(request, main);
-
-  const complete = events.find((event) => event.message === "prune_complete");
-  expect(complete?.metadata?.durationMs).toBeLessThan(150);
-});
-
-test("prunes and routes at the same time", async () => {
-  const { subject } = preparer(
-    {
-      async route() {
-        await sleep(150);
-        return {};
+  test("times the prune without the routing wait", async () => {
+    const { subject, events } = preparer(
+      {
+        async route() {
+          await sleep(200);
+          return {};
+        },
       },
-    },
-    150,
-  );
+      30,
+    );
 
-  const startedAt = Date.now();
-  await subject.prepare(request, main);
+    const prepared = subject.prepare(request, main);
+    await jest.advanceTimersByTimeAsync(200);
+    await prepared;
 
-  expect(Date.now() - startedAt).toBeLessThan(280);
+    const complete = events.find((event) => event.message === "prune_complete");
+    expect(complete?.metadata?.durationMs).toBe(30);
+  });
+
+  test("prunes and routes at the same time", async () => {
+    const { subject } = preparer(
+      {
+        async route() {
+          await sleep(150);
+          return {};
+        },
+      },
+      150,
+    );
+
+    const startedAt = Date.now();
+    const prepared = subject.prepare(request, main);
+    await jest.advanceTimersByTimeAsync(150);
+    await prepared;
+
+    expect(Date.now() - startedAt).toBe(150);
+  });
 });
 
 test("confirms a rejection only when the resend succeeds", async () => {
