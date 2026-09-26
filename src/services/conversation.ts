@@ -45,3 +45,20 @@ export function isSideRequest(request: AnthropicRequest): boolean {
   const first = request.messages.find((message) => message.role === "user");
   return first !== undefined && messageText(first).startsWith("<session>");
 }
+
+/**
+ * Claude Code's /compact request ends with its summary prompt. It belongs to
+ * the thread but is not a prompt from the user, so it never changes routing.
+ */
+export function isCompactionRequest(request: AnthropicRequest): boolean {
+  const last = [...request.messages]
+    .reverse()
+    .find((message) => message.role === "user");
+  if (last === undefined) return false;
+  const text = messageText(last);
+  return (
+    text.includes(
+      "Please provide your summary based on the conversation so far",
+    ) && text.includes("<summary>")
+  );
+}

@@ -262,6 +262,22 @@ describe("ModelRouter in auto mode", () => {
     expect(compacted).toEqual({ model: HARD, fallback: expect.any(Object) });
   });
 
+  test("/compact's summary request keeps the model without asking Jev", async () => {
+    const asker = scriptedAsker({ hard: 0.9, continues: 0 });
+    const { router: subject } = await router(asker, "auto");
+    const summaryPrompt =
+      "Your task is to create a detailed summary.\n<summary>\n</summary>\nPlease provide your summary based on the conversation so far, following this structure.";
+
+    await subject.route(turn(["Redesign auth"]), thread());
+    const compaction = await subject.route(
+      turn(["Redesign auth", summaryPrompt]),
+      thread(),
+    );
+
+    expect(compaction).toEqual({ model: HARD, fallback: expect.any(Object) });
+    expect(asker.calls).toBe(1);
+  });
+
   test("skips Claude Code's session setup request", async () => {
     const asker = scriptedAsker({ hard: 0.9, continues: 0 });
     const { router: subject } = await router(asker, "auto");

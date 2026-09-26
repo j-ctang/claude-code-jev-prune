@@ -112,6 +112,8 @@ conversation key is the session header plus the agent ID, or `main`, so it
 survives `/compact`. Without a session header, the key is a hash of the first
 user message's text. Claude Code's session setup request (no tools, prompt
 wrapped in `<session>`) is never routed.
+Claude Code's `/compact` summary request keeps the thread's current model and
+never calls Jev: its cache is warm there, and it is not a prompt from the user.
 
 State is in memory. A proxy restart forgets it; the next request then uses
 whatever model Claude Code sends, which is the default model. Restarts are rare

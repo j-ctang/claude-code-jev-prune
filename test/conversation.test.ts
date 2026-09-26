@@ -1,5 +1,6 @@
 import {
   identifyConversation,
+  isCompactionRequest,
   isSideRequest,
 } from "../src/services/conversation.js";
 import type { AnthropicRequest } from "../src/types.js";
@@ -65,5 +66,18 @@ describe("isSideRequest", () => {
       ),
     ).toBe(false);
     expect(isSideRequest(request("Redesign auth"))).toBe(false);
+  });
+});
+
+describe("isCompactionRequest", () => {
+  test("matches Claude Code's summary prompt as the last user message", () => {
+    const summary =
+      "Summarize.\n<summary>\n</summary>\nPlease provide your summary based on the conversation so far, following this structure.";
+
+    expect(isCompactionRequest(request(summary))).toBe(true);
+    expect(isCompactionRequest(request("Please write a <summary> tag"))).toBe(
+      false,
+    );
+    expect(isCompactionRequest(request("Redesign auth"))).toBe(false);
   });
 });

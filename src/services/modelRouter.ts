@@ -3,7 +3,11 @@ import type { AnthropicRequest, NoulAsker, NoulQuestion } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { SavedChoice } from "./savedChoice.js";
 import { remember } from "../utils/recency.js";
-import { isSideRequest, type Conversation } from "./conversation.js";
+import {
+  isCompactionRequest,
+  isSideRequest,
+  type Conversation,
+} from "./conversation.js";
 import { readTurn, type Turn } from "./turn.js";
 
 export interface RouteDecision {
@@ -138,7 +142,12 @@ export class ModelRouter {
       return command ? { notice: command.notice } : {};
     }
     const state = this.stateFor(conversation);
-    if (state.unavailable || !turn.newUserTurn) {
+    // Compaction stays on the thread's model: its cache is warm there.
+    if (
+      state.unavailable ||
+      !turn.newUserTurn ||
+      isCompactionRequest(request)
+    ) {
       return this.decision(conversation, state, command?.notice);
     }
 
