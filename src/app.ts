@@ -8,6 +8,7 @@ import {
   type RequestPruner,
   type RequestRouter,
 } from "./services/messagePreparer.js";
+import type { NoticeMemory } from "./services/noticeMemory.js";
 import type { ProxyStats } from "./types.js";
 import type { AppLogger } from "./utils/logger.js";
 import type { SkillShadowObserver } from "./services/skillShadowObserver.js";
@@ -24,6 +25,7 @@ interface AppDependencies {
   upstreamSignal?: AbortSignal;
   shadowObserver?: SkillShadowObserver;
   router?: RequestRouter;
+  notices?: NoticeMemory;
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -58,6 +60,7 @@ export function createApp(dependencies: AppDependencies): Express {
         pruner: dependencies.pruner,
         router: dependencies.router,
         shadowObserver: dependencies.shadowObserver,
+        notices: dependencies.notices,
         logger: dependencies.logger,
         stats,
       }),

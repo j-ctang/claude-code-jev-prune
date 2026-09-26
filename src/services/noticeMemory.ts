@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 import type { AnthropicRequest, Message } from "../types.js";
+import { readJson, writeJsonAtomic } from "../utils/jsonFile.js";
+import type { AppLogger } from "../utils/logger.js";
 import { remember } from "../utils/recency.js";
 import { appendNoticeAt, lastTurnIndex } from "./turn.js";
 
@@ -10,8 +12,42 @@ interface Noticed {
   notices: readonly string[];
 }
 
+interface NoticeMemoryOptions {
+  /** Where notices are saved, so a restarted proxy adds them back too. */
+  path?: string | undefined;
+  logger?: AppLogger | undefined;
+  maxConversations?: number;
+  maxEntries?: number;
+}
+
 const MAX_CONVERSATIONS = 500;
 const MAX_ENTRIES = 200;
+const STATE_VERSION = 1;
+
+function isNoticed(value: unknown): value is Noticed {
+  const entry = value as Record<string, unknown> | null;
+  return (
+    typeof entry === "object" &&
+    entry !== null &&
+    Number.isInteger(entry.index) &&
+    typeof entry.fingerprint === "string" &&
+    Array.isArray(entry.notices) &&
+    entry.notices.every((notice) => typeof notice === "string")
+  );
+}
+
+/** Saved conversations, skipping any entry that is malformed. */
+function loadConversations(path: string): Array<[string, Noticed[]]> {
+  const saved = readJson(path) as Record<string, unknown> | undefined;
+  if (saved?.version !== STATE_VERSION || !Array.isArray(saved.conversations)) {
+    return [];
+  }
+  return saved.conversations.flatMap((item: unknown) =>
+    Array.isArray(item) && typeof item[0] === "string" && Array.isArray(item[1])
+      ? [[item[0], item[1].filter(isNoticed)] as [string, Noticed[]]]
+      : [],
+  );
+}
 
 /**
  * Claude Code moves cache_control between requests and may send text as a
@@ -40,11 +76,22 @@ function fingerprint(message: Message): string {
  */
 export class NoticeMemory {
   private readonly conversations = new Map<string, readonly Noticed[]>();
+  private readonly maxConversations: number;
+  private readonly maxEntries: number;
 
-  constructor(
-    private readonly maxConversations = MAX_CONVERSATIONS,
-    private readonly maxEntries = MAX_ENTRIES,
-  ) {}
+  constructor(private readonly options: NoticeMemoryOptions = {}) {
+    this.maxConversations = options.maxConversations ?? MAX_CONVERSATIONS;
+    this.maxEntries = options.maxEntries ?? MAX_ENTRIES;
+    if (!options.path) return;
+    for (const [conversation, entries] of loadConversations(options.path)) {
+      remember(
+        this.conversations,
+        conversation,
+        entries,
+        this.maxConversations,
+      );
+    }
+  }
 
   /**
    * Returns `request` with earlier notices back in place and `notices` added
@@ -69,8 +116,21 @@ export class NoticeMemory {
         ),
         { index, fingerprint: print, notices },
       ].slice(-this.maxEntries);
+      remember(
+        this.conversations,
+        conversation,
+        entries,
+        this.maxConversations,
+      );
+      this.save();
+    } else if (entries.length > 0) {
+      remember(
+        this.conversations,
+        conversation,
+        entries,
+        this.maxConversations,
+      );
     }
-    remember(this.conversations, conversation, entries, this.maxConversations);
 
     let noticed = request;
     for (const entry of entries) {
@@ -81,5 +141,20 @@ export class NoticeMemory {
       }
     }
     return noticed;
+  }
+
+  /** A failed save never fails the request; notices stay in memory. */
+  private save(): void {
+    if (!this.options.path) return;
+    try {
+      writeJsonAtomic(this.options.path, {
+        version: STATE_VERSION,
+        conversations: [...this.conversations.entries()],
+      });
+    } catch (error) {
+      this.options.logger?.warn("notice_state_save_failed", {
+        error: error instanceof Error ? error.name : "unknown error",
+      });
+    }
   }
 }

@@ -46,7 +46,7 @@ Express application
 | `src/services/conversation.ts` | Tell the main thread from subagents by header and key each thread. |
 | `src/services/modelRouter.ts` | Decide per conversation whether to move a hard prompt to the hard model and back, and handle `/jev-route-*` commands. |
 | `src/services/savedChoice.ts` | Save a slash-command choice across restarts: canary auto-prune and the `ask` / `auto` / `off` routing choice. |
-| `src/services/noticeMemory.ts` | Add each notice back where Claude saw it, so preserved thinking keeps a byte-identical history. |
+| `src/services/noticeMemory.ts` | Add each notice back where Claude saw it, so preserved thinking keeps a byte-identical history. Saved beside the pruning state to survive a restart. |
 | `src/services/messagePreparer.ts` | Turn one `/v1/messages` request into what is sent: canary, prune and route, notices for Claude, the routed-model fallback, and the skill shadow reply hook. |
 | `src/middleware/proxy.ts` | Forward headers/body and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
@@ -159,7 +159,7 @@ A Jev error invalidates the entire prune attempt. The proxy never applies a part
 
 ## Header and Credential Boundaries
 
-When jev-prune changed a request (a prune, a notice, or a routed model) and the request uses thinking, the proxy adds the `thinking-binding-controls-2026-08-01` beta and `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Preserved thinking is bound to the exact history and model it was made with, so any edit invalidates the thinking before it. Without this, newer accounts get a 400; with it, the API drops only the mismatched thinking. Requests jev-prune left unchanged are sent as is.
+When jev-prune changed a request (a prune, a notice, or a routed model) and the request uses adaptive or enabled thinking, the proxy adds the `thinking-binding-controls-2026-08-01` beta and `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Preserved thinking is bound to the exact history before it, so an edit invalidates every thinking block after the edit. Without this, newer accounts get a 400; with it, the API drops only the mismatched thinking. Requests jev-prune left unchanged are sent as is. With thinking disabled, the API rejects `block_binding`, so it is never added. Sending thinking made by one model to another needs no beta.
 
 The proxy removes hop-by-hop request headers, stale body-length/encoding headers, `typesafe-api-key`, and `x-typesafe-api-key` before contacting Anthropic. It preserves Claude Code's Anthropic authentication and version headers.
 

@@ -1,3 +1,6 @@
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { NoticeMemory } from "../src/services/noticeMemory.js";
 import type { AnthropicRequest, Message } from "../src/types.js";
 
@@ -60,7 +63,7 @@ describe("NoticeMemory", () => {
   });
 
   test("keeps only the newest entries of a long conversation", () => {
-    const memory = new NoticeMemory(500, 2);
+    const memory = new NoticeMemory({ maxEntries: 2 });
     const history: Message[] = [];
     for (const text of ["A", "B", "C"]) {
       history.push(user(text));
@@ -155,5 +158,87 @@ describe("NoticeMemory", () => {
     );
 
     expect(JSON.stringify(subagent.messages)).not.toContain("main notice");
+  });
+
+  describe("saved to a file", () => {
+    const statePath = () =>
+      join(
+        mkdtempSync(join(tmpdir(), "jev-notices-")),
+        "nested",
+        "notices.json",
+      );
+
+    test("adds notices back after a restart", () => {
+      const path = statePath();
+      const first = new NoticeMemory({ path }).apply(
+        "s:main",
+        request(user("Redesign auth")),
+        ["[jev-prune] Pruned."],
+      );
+      const later = new NoticeMemory({ path }).apply(
+        "s:main",
+        request(user("Redesign auth"), reply("Done."), user("Add tests")),
+        [],
+      );
+
+      expect(later.messages[0]).toEqual(first.messages[0]);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+    });
+
+    test("starts empty from a missing, malformed, or foreign file", () => {
+      const path = statePath();
+      const fresh = () =>
+        new NoticeMemory({ path }).apply("s:main", request(user("A")), []);
+
+      expect(fresh().messages[0]).toEqual(user("A"));
+      new NoticeMemory({ path }).apply("s:main", request(user("A")), ["n"]);
+      writeFileSync(path, "{not json");
+      expect(fresh().messages[0]).toEqual(user("A"));
+      writeFileSync(path, JSON.stringify({ version: 99, conversations: [] }));
+      expect(fresh().messages[0]).toEqual(user("A"));
+    });
+
+    test("skips malformed entries and keeps valid ones", () => {
+      const path = statePath();
+      new NoticeMemory({ path }).apply("s:main", request(user("A")), ["n"]);
+      const saved = JSON.parse(readFileSync(path, "utf8")) as {
+        conversations: Array<[string, unknown[]]>;
+      };
+      saved.conversations[0]?.[1].push({ index: "0", notices: [1] });
+      saved.conversations.push(["broken", "nope"] as never);
+      writeFileSync(path, JSON.stringify(saved));
+
+      const later = new NoticeMemory({ path }).apply(
+        "s:main",
+        request(user("A"), reply("ok"), user("B")),
+        [],
+      );
+
+      expect(JSON.stringify(later.messages[0])).toContain('"n"');
+    });
+
+    test("a failed save keeps notices in memory and logs a warning", () => {
+      const warnings: string[] = [];
+      const log = () => undefined;
+      const memory = new NoticeMemory({
+        path: "/dev/null/notices.json",
+        logger: {
+          info: log,
+          debug: log,
+          error: log,
+          warn: (message) => warnings.push(message),
+        },
+      });
+
+      memory.apply("s:main", request(user("A")), ["n"]);
+      const later = memory.apply(
+        "s:main",
+        request(user("A"), reply("ok"), user("B")),
+        [],
+      );
+
+      expect(JSON.stringify(later.messages[0])).toContain('"n"');
+      expect(warnings).toEqual(["notice_state_save_failed"]);
+    });
   });
 });

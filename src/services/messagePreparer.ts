@@ -75,6 +75,8 @@ interface MessagePreparerDependencies {
   pruner: RequestPruner;
   router?: RequestRouter | undefined;
   shadowObserver?: SkillShadowObserver | undefined;
+  /** Defaults to memory only, lost when the proxy restarts. */
+  notices?: NoticeMemory | undefined;
   logger: AppLogger;
   stats: ProxyStats;
 }
@@ -84,9 +86,11 @@ interface MessagePreparerDependencies {
  * canary, prunes and routes, and adds every notice for Claude.
  */
 export class MessagePreparer {
-  private readonly notices = new NoticeMemory();
+  private readonly notices: NoticeMemory;
 
-  constructor(private readonly dependencies: MessagePreparerDependencies) {}
+  constructor(private readonly dependencies: MessagePreparerDependencies) {
+    this.notices = dependencies.notices ?? new NoticeMemory();
+  }
 
   async prepare(
     request: AnthropicRequest,
