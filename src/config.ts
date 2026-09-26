@@ -44,6 +44,7 @@ export interface Config {
   trimMinTokens: number;
   trimKeepTokens: number;
   notify: boolean;
+  skillShadow: boolean;
   canaryPrefix?: string;
   canaryAction?: "notice" | "prune";
   keepRecent: number;
@@ -178,6 +179,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     trimMinTokens,
     trimKeepTokens,
     notify: parseBoolean(env.JEV_PRUNE_NOTIFY ?? "true", "JEV_PRUNE_NOTIFY"),
+    skillShadow: parseBoolean(env.JEV_PRUNE_SKILL_SHADOW ?? "false", "JEV_PRUNE_SKILL_SHADOW"),
     canaryPrefix: env.JEV_CANARY_PREFIX?.trim() ?? "",
     canaryAction,
     keepRecent: parseInteger(
