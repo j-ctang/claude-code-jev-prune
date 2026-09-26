@@ -19,7 +19,7 @@ Express application
        │    ├── extract safe candidates
        │    ├── apply protection policy
        │    ├── score candidates with Jev
-       │    ├── remove selected pairs
+       │    ├── stub selected pairs
        │    └── route model
        └── forward to ANTHROPIC_UPSTREAM_URL
                     │
@@ -39,7 +39,7 @@ Express application
 | `src/services/relevanceScorer.ts` | Ask Jev whether each tool call is still needed, in batches of 32. |
 | `src/services/contextPruner.ts` | Run the pruning pipeline: re-apply saved decisions, gate, rewrite, score, render. |
 | `src/services/decisionMemory.ts` | Remember drop, keep, and rewrite decisions; persist them across restarts. |
-| `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and remove or rewrite them immutably. |
+| `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and stub or rewrite them immutably. |
 | `src/services/toolRewrites.ts` | Stub superseded Reads and trim large outputs without calling Jev. |
 | `src/services/turn.ts` | Read the latest turn: new user turn, goal, slash command, last reply. |
 | `src/services/canary.ts` | Watch the main thread's response canary and handle `/jev-prune-auto` commands. |
@@ -77,7 +77,7 @@ A tool call is eligible only when all of these statements are true:
 
 The blocks do not need to be in adjacent messages. Candidates are ordered by the assistant block's location. Duplicate, unmatched, and malformed blocks remain untouched.
 
-When a candidate is dropped, the exact tool-use block and matching result block are removed. Any array-content message made empty by that removal is also removed. Surrounding blocks, message properties, top-level request properties, and system content are preserved.
+When a candidate is dropped, its tool-use input becomes `{}` and its result becomes the short stub `[jev-prune] Removed as stale.` No block or message is removed, so the history keeps its shape. Removing an emptied message could leave a mid-conversation `system` message right after an assistant turn, which the API rejects with a 400. Surrounding blocks, message properties, top-level request properties, and system content are preserved.
 
 ## Protection and Scoring Policy
 

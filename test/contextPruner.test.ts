@@ -16,6 +16,7 @@ import {
   allToolResultIds,
   allToolUseIds,
   contentBlock,
+  droppedToolIds,
   twoToolRequest,
 } from "./fixtures/messages.js";
 
@@ -421,7 +422,7 @@ describe("ContextPruner", () => {
     ]);
   });
 
-  test("removes messages made empty by pruning", async () => {
+  test("stubs dropped pairs without changing the history's shape", async () => {
     const pruner = new ContextPruner({
       config: config(),
       scorer: scorerReturning({ "call-old": 0.1, "call-new": 0.1 }),
@@ -429,13 +430,24 @@ describe("ContextPruner", () => {
 
     const result = await pruner.prune(twoToolRequest);
 
-    expect(result.request.messages).toHaveLength(5);
+    // Removing an emptied message could leave a `system` message after an
+    // assistant turn, which the API rejects.
     expect(
-      result.request.messages.some(
-        (message) =>
-          Array.isArray(message.content) && message.content.length === 0,
-      ),
-    ).toBe(false);
+      result.request.messages.map((message) => [
+        message.role,
+        Array.isArray(message.content)
+          ? message.content.map((block) => block.type)
+          : "text",
+      ]),
+    ).toEqual(
+      twoToolRequest.messages.map((message) => [
+        message.role,
+        Array.isArray(message.content)
+          ? message.content.map((block) => block.type)
+          : "text",
+      ]),
+    );
+    expect(droppedToolIds(result.request)).toEqual(["call-old", "call-new"]);
   });
 
   test("does not score while the agent is mid-task", async () => {

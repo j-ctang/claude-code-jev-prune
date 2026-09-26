@@ -91,9 +91,14 @@ export function extractCandidates(request: AnthropicRequest): ToolCandidate[] {
   );
 }
 
+/** What a dropped tool call's result becomes. */
+export const DROPPED_STUB = "[jev-prune] Removed as stale.";
+
 /**
- * Removes dropped tool pairs and replaces rewritten tool-result content.
- * Every other field on a rewritten block (`cache_control`, `is_error`) is kept.
+ * Stubs dropped tool pairs and replaces rewritten tool-result content. Blocks
+ * and messages are never removed, so the history keeps its shape: removing an
+ * emptied message could leave a `system` message where the API rejects it.
+ * Every other field on a changed block (`cache_control`, `is_error`) is kept.
  */
 export function applyDecisions(
   request: AnthropicRequest,
@@ -101,33 +106,31 @@ export function applyDecisions(
   rewrites: ReadonlyMap<string, unknown>,
 ): AnthropicRequest {
   if (droppedIds.size === 0 && rewrites.size === 0) return request;
-  const messages = request.messages.flatMap((message) => {
-    if (!Array.isArray(message.content)) return [message];
+  const messages = request.messages.map((message) => {
+    if (!Array.isArray(message.content)) return message;
     let changed = false;
-    const content = message.content.flatMap((block) => {
+    const content = message.content.map((block) => {
       if (
         message.role === "assistant" &&
         isToolUse(block) &&
         droppedIds.has(block.id)
       ) {
         changed = true;
-        return [];
+        return { ...block, input: {} };
       }
       if (message.role === "user" && isToolResult(block)) {
         if (droppedIds.has(block.tool_use_id)) {
           changed = true;
-          return [];
+          return { ...block, content: DROPPED_STUB };
         }
         if (rewrites.has(block.tool_use_id)) {
           changed = true;
-          return [{ ...block, content: rewrites.get(block.tool_use_id) }];
+          return { ...block, content: rewrites.get(block.tool_use_id) };
         }
       }
-      return [block];
+      return block;
     });
-    if (!changed) return [message];
-    if (content.length === 0) return [];
-    return [{ ...message, content }];
+    return changed ? { ...message, content } : message;
   });
 
   return { ...request, messages };
