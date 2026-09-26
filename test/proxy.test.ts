@@ -13,6 +13,7 @@ import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import { SkillShadow } from "../src/services/skillShadow.js";
 import { SkillCatalog } from "../src/services/skillCatalog.js";
+import { SkillShadowObserver } from "../src/services/skillShadowObserver.js";
 import type {
   AnthropicRequest,
   ProxyStats,
@@ -127,7 +128,7 @@ function appFor(
     fetchFn: fetch,
     logger,
     startedAt: Date.now() - 42_000,
-    ...(shadow ? { shadow } : {}),
+    ...(shadow ? { shadowObserver: new SkillShadowObserver(shadow, logger) } : {}),
   });
 }
 
@@ -154,7 +155,7 @@ describe("Anthropic proxy", () => {
     const pruned = { messages: [{ role: "user" as const, content: "Create report." }] };
     try {
       await request(createApp({
-        config, shadow, logger, fetchFn: fetch, startedAt: Date.now(),
+        config, shadowObserver: new SkillShadowObserver(shadow, logger), logger, fetchFn: fetch, startedAt: Date.now(),
         pruner: { prune: async () => ({ request: pruned, beforeTokens: 0, afterTokens: 0, evaluated: 0, dropped: 0, reason: "disabled" }) },
       }))
         .post("/v1/messages")

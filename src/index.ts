@@ -10,6 +10,7 @@ import { createLogger } from "./utils/logger.js";
 import { SkillShadow, skillRootsForProjects } from "./services/skillShadow.js";
 import { SkillCompletionJudge } from "./services/skillCompletion.js";
 import { SkillCatalog } from "./services/skillCatalog.js";
+import { SkillShadowObserver } from "./services/skillShadowObserver.js";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { readSessionProjects } from "./sessions.js";
@@ -59,10 +60,13 @@ async function start(config: Config, logger: ReturnType<typeof createLogger>): P
     upstreamSignal: upstreamAbort.signal,
     ...(config.skillShadow
       ? {
-          shadow: new SkillShadow({
-            catalog: catalog!,
-            judge: (goal, reply) => completionJudge!.score(goal, reply),
-          }),
+          shadowObserver: new SkillShadowObserver(
+            new SkillShadow({
+              catalog: catalog!,
+              judge: (goal, reply) => completionJudge!.score(goal, reply),
+            }),
+            logger,
+          ),
         }
       : {}),
   });

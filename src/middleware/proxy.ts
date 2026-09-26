@@ -10,9 +10,8 @@ import { CanaryPolicy } from "../services/canary.js";
 import type { PruneOptions } from "../services/contextPruner.js";
 import { recordPruneOutcome } from "../services/pruneLog.js";
 import { appendNotice } from "../services/turn.js";
-import type { SkillShadow } from "../services/skillShadow.js";
+import type { SkillShadowObserver } from "../services/skillShadowObserver.js";
 import { createResponseTextTap } from "../utils/responseTextTap.js";
-import { randomUUID } from "node:crypto";
 
 interface RequestPruner {
   prune(
@@ -30,7 +29,7 @@ export interface ProxyDependencies {
   logger: AppLogger;
   stats: ProxyStats;
   upstreamSignal?: AbortSignal;
-  shadow?: SkillShadow;
+  shadowObserver?: SkillShadowObserver;
 }
 
 const REQUEST_HEADER_BLOCKLIST = new Set([
@@ -126,8 +125,7 @@ async function forward(
 ): Promise<void> {
   dependencies.stats.requests += 1;
   let body = request.body as unknown;
-  let shadowSessionId: string | undefined;
-  let shadowRevision: number | undefined;
+  let onFinalReply: ((reply: string) => void) | undefined;
   const path = request.originalUrl.split("?", 1)[0];
 
   if (
@@ -142,20 +140,8 @@ async function forward(
       ...(sessionId ? { sessionId } : {}),
       ...(canary.prune ? { trigger: "canary" as const } : {}),
     });
-    if (dependencies.config.skillShadow && dependencies.shadow && sessionId) {
-      shadowSessionId = sessionId;
-      for (const finding of dependencies.shadow.observe(
-        result.request,
-        sessionId,
-      )) {
-        dependencies.logger.info("skill_shadow_observed", {
-          sessionId,
-          skill: finding.skill,
-          potentialTokens: finding.potentialTokens,
-        });
-      }
-      shadowRevision = dependencies.shadow.revision(sessionId);
-    }
+    if (dependencies.config.skillShadow && dependencies.shadowObserver && sessionId)
+      onFinalReply = dependencies.shadowObserver.observe(result.request, sessionId);
     // Every notice for Claude is added here, and only when notices are on.
     const notices = [result.notice, canary.notice].filter(
       (notice): notice is string => notice !== undefined,
@@ -223,32 +209,10 @@ async function forward(
         });
       },
     );
-    if (
-      upstream.ok &&
-      shadowSessionId &&
-      shadowRevision !== undefined &&
-      dependencies.shadow
-    ) {
-      const sessionId = shadowSessionId;
-      const revision = shadowRevision;
+    if (upstream.ok && onFinalReply) {
       const responseTap = createResponseTextTap(
         upstream.headers.get("content-type") ?? "",
-        (reply) => {
-          void dependencies.shadow
-            ?.complete(sessionId, reply, revision)
-            .then((findings) => {
-              for (const finding of findings) {
-                dependencies.logger.info("skill_shadow_complete", {
-                  eventId: randomUUID(),
-                  sessionId,
-                  skill: finding.skill,
-                  potentialTokens: finding.potentialTokens,
-                  confidence: finding.confidence,
-                });
-              }
-            })
-            .catch(() => undefined);
-        },
+        onFinalReply,
       );
       await pipeline(stream, tap, responseTap, response);
     } else {
