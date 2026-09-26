@@ -54,6 +54,10 @@ export interface Config {
   jevBaseUrl: string;
   jevModel: string;
   jevTimeoutMs: number;
+  routeDefaultModel: string;
+  routeHardModel: string;
+  routeUpThreshold: number;
+  routeDownThreshold: number;
   anthropicUpstreamUrl: string;
 }
 
@@ -74,6 +78,14 @@ function parseInteger(
     throw new Error(
       `${name} must be an integer between ${minimum} and ${maximum}`,
     );
+  }
+  return parsed;
+}
+
+function parseProbability(value: string, name: string): number {
+  const parsed = value.trim() ? Number(value) : Number.NaN;
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    throw new Error(`${name} must be a number between 0 and 1`);
   }
   return parsed;
 }
@@ -138,6 +150,27 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
   if (trimKeepTokens * 2 >= trimMinTokens) {
     throw new Error(
       "JEV_PRUNE_TRIM_KEEP_TOKENS must be less than half of JEV_PRUNE_TRIM_MIN_TOKENS",
+    );
+  }
+  const routeUpThreshold = parseProbability(
+    env.JEV_ROUTE_UP_THRESHOLD ?? "0.7",
+    "JEV_ROUTE_UP_THRESHOLD",
+  );
+  const routeDownThreshold = parseProbability(
+    env.JEV_ROUTE_DOWN_THRESHOLD ?? "0.4",
+    "JEV_ROUTE_DOWN_THRESHOLD",
+  );
+  if (routeDownThreshold >= routeUpThreshold) {
+    throw new Error(
+      "JEV_ROUTE_DOWN_THRESHOLD must be less than JEV_ROUTE_UP_THRESHOLD",
+    );
+  }
+  const routeDefaultModel =
+    env.JEV_ROUTE_DEFAULT_MODEL?.trim() || "claude-opus-5-5";
+  const routeHardModel = env.JEV_ROUTE_HARD_MODEL?.trim() || "claude-fable-5-1";
+  if (routeDefaultModel === routeHardModel) {
+    throw new Error(
+      "JEV_ROUTE_HARD_MODEL must differ from JEV_ROUTE_DEFAULT_MODEL",
     );
   }
   const jevApiKey = hasRealKey(env.TYPESAFE_API_KEY)
@@ -214,6 +247,10 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
       "JEV_TIMEOUT_MS",
       1,
     ),
+    routeDefaultModel,
+    routeHardModel,
+    routeUpThreshold,
+    routeDownThreshold,
     anthropicUpstreamUrl: parseUrl(
       env.ANTHROPIC_UPSTREAM_URL ?? "https://api.anthropic.com",
       "ANTHROPIC_UPSTREAM_URL",

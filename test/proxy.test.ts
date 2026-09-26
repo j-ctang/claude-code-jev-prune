@@ -2,7 +2,13 @@ import { once } from "node:events";
 import { spawn } from "node:child_process";
 import { mkdtemp } from "node:fs/promises";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingMessage,
+  type RequestListener,
+  type Server,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +16,7 @@ import request from "supertest";
 import type { Config } from "../src/config.js";
 import { createApp } from "../src/app.js";
 import { PruneError } from "../src/errors.js";
+import type { RequestRouter } from "../src/services/messagePreparer.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import { SkillShadow } from "../src/services/skillShadow.js";
 import { SkillCatalog } from "../src/services/skillCatalog.js";
@@ -36,6 +43,21 @@ interface FakeUpstream {
 }
 
 const openUpstreams: FakeUpstream[] = [];
+
+const openServers: Server[] = [];
+
+/**
+ * Serves the app on 127.0.0.1 for supertest. supertest's default listens on
+ * the dual-stack wildcard and then dials 127.0.0.1, which on macOS reaches any
+ * other process bound to 127.0.0.1 on the same port instead of this app.
+ */
+async function serve(app: RequestListener): Promise<string> {
+  const server = createServer(app);
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  openServers.push(server);
+  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+}
 
 async function startUpstream(
   respond: (
@@ -101,6 +123,10 @@ function testConfig(
     jevBaseUrl: "https://api.typesafe.ai",
     jevModel: "jev-latest",
     jevTimeoutMs: 2_000,
+    routeDefaultModel: "claude-opus-5-5",
+    routeHardModel: "claude-fable-5-1",
+    routeUpThreshold: 0.7,
+    routeDownThreshold: 0.4,
     anthropicUpstreamUrl: upstreamUrl,
     ...overrides,
   };
@@ -132,8 +158,57 @@ function appFor(
   });
 }
 
+function appWithRouter(upstreamUrl: string, router: RequestRouter) {
+  const config = testConfig(upstreamUrl, {
+    pruneThreshold: 1_000_000,
+    notify: true,
+  });
+  const pruner = new ContextPruner({
+    config,
+    scorer: {
+      async score() {
+        return new Map();
+      },
+    },
+  });
+  return createApp({
+    config,
+    pruner,
+    fetchFn: fetch,
+    logger: silentLogger,
+    startedAt: Date.now(),
+    router,
+  });
+}
+
+const hardRouter = (confirmed: string[] = []): RequestRouter => ({
+  async route() {
+    return {
+      model: "claude-fable-5-1",
+      notice: "[jev-prune] Switched.",
+      fallback: {
+        retries: (status) => status === 400 || status === 404,
+        notice: "[jev-prune] Not available.",
+        confirm: () => confirmed.push("s:abc"),
+      },
+    };
+  },
+});
+
+const routedRequest: AnthropicRequest = {
+  model: "claude-opus-5-5",
+  messages: [{ role: "user", content: "Redesign auth" }],
+};
+
 afterEach(async () => {
   await Promise.all(openUpstreams.splice(0).map((upstream) => upstream.close()));
+  await Promise.all(
+    openServers.splice(0).map((server) => {
+      server.close();
+      server.closeAllConnections();
+      return once(server, "close");
+    }),
+  );
 });
 
 describe("Anthropic proxy", () => {
@@ -214,10 +289,10 @@ describe("Anthropic proxy", () => {
       },
     };
 
-    await request(appFor(upstream.url, scorer, { notify: true }))
+    await request(await serve(appFor(upstream.url, scorer, { notify: true })))
       .post("/v1/messages")
       .send(twoToolRequest);
-    await request(appFor(upstream.url, scorer, { notify: false }))
+    await request(await serve(appFor(upstream.url, scorer, { notify: false })))
       .post("/v1/messages")
       .send(twoToolRequest);
 
@@ -261,11 +336,11 @@ describe("Anthropic proxy", () => {
         { role: "user", content: "Continue again" },
       ],
     };
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(first);
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(second);
@@ -301,11 +376,11 @@ describe("Anthropic proxy", () => {
       content: "Second reply",
     });
 
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(first);
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(second);
@@ -343,7 +418,7 @@ describe("Anthropic proxy", () => {
         statePath,
       },
     );
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send({
@@ -361,11 +436,11 @@ describe("Anthropic proxy", () => {
       role: "assistant",
       content: "Second reply",
     });
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(first);
-    await request(app)
+    await request(await serve(app))
       .post("/v1/messages")
       .set("x-claude-code-session-id", "s")
       .send(second);
@@ -386,14 +461,14 @@ describe("Anthropic proxy", () => {
         return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.1]));
       },
     }, { canaryPrefix: "Yo:", canaryAction: "prune", pruneThreshold: 1_000_000, statePath });
-    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s")
+    await request(await serve(app)).post("/v1/messages").set("x-claude-code-session-id", "s")
       .send({ messages: [{ role: "user", content: "<command-name>/jev-prune-auto-off</command-name>" }] });
     const first = structuredClone(twoToolRequest);
     first.messages.splice(-1, 0, { role: "assistant", content: "First reply" });
     const second = structuredClone(first);
     second.messages.splice(-1, 0, { role: "assistant", content: "Second reply" });
-    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s").send(first);
-    await request(app).post("/v1/messages").set("x-claude-code-session-id", "s").send(second);
+    await request(await serve(app)).post("/v1/messages").set("x-claude-code-session-id", "s").send(first);
+    await request(await serve(app)).post("/v1/messages").set("x-claude-code-session-id", "s").send(second);
 
     expect(allToolUseIds(upstream.requests[2]?.body as AnthropicRequest)).toEqual(["call-old", "call-new"]);
   });
@@ -410,7 +485,7 @@ describe("Anthropic proxy", () => {
     };
     const app = appFor(upstream.url, scorer);
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages")
       .set("x-api-key", "anthropic-secret")
       .set("anthropic-version", "2023-06-01")
@@ -454,7 +529,7 @@ describe("Anthropic proxy", () => {
     };
     const app = appFor(upstream.url, scorer, {}, logger);
 
-    await request(app).post("/v1/messages").send(twoToolRequest).expect(200);
+    await request(await serve(app)).post("/v1/messages").send(twoToolRequest).expect(200);
 
     expect(upstream.requests[0]?.body).toEqual(twoToolRequest);
     expect(warnings).toEqual([
@@ -481,7 +556,7 @@ describe("Anthropic proxy", () => {
     const body = { model: "claude-sonnet-4-5", messages: [] };
     const app = appFor(upstream.url, scorer);
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages/count_tokens?beta=true")
       .send(body);
 
@@ -525,8 +600,8 @@ describe("Anthropic proxy", () => {
       logger,
     );
 
-    const json = await request(app).post("/v1/messages").send(twoToolRequest);
-    const streamed = await request(app)
+    const json = await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
+    const streamed = await request(await serve(app))
       .post("/v1/messages")
       .send({ ...twoToolRequest, stream: true });
 
@@ -558,7 +633,7 @@ describe("Anthropic proxy", () => {
       { pruningEnabled: false },
     );
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages/count_tokens")
       .set("connection", "x-client-private")
       .set("keep-alive", "timeout=5")
@@ -585,7 +660,7 @@ describe("Anthropic proxy", () => {
       { pruningEnabled: false },
     );
 
-    const response = await request(app).post("/v1/messages").send(twoToolRequest);
+    const response = await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
 
     expect(response.status).toBe(429);
     expect(response.headers["retry-after"]).toBe("3");
@@ -634,7 +709,7 @@ describe("Anthropic proxy", () => {
       { pruningEnabled: false },
     );
 
-    const response = await request(app).post("/v1/messages").send(twoToolRequest);
+    const response = await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
 
     expect(response.status).toBe(502);
     expect(response.body).toEqual({ error: "Anthropic upstream unavailable" });
@@ -656,8 +731,8 @@ describe("Anthropic proxy", () => {
       },
     });
 
-    await request(app).post("/v1/messages").send(twoToolRequest);
-    const health = await request(app).get("/health");
+    await request(await serve(app)).post("/v1/messages").send(twoToolRequest);
+    const health = await request(await serve(app)).get("/health");
 
     expect(health.body.prunes).toBe(1);
     expect(health.body.tokens_removed).toBeGreaterThan(0);
@@ -690,7 +765,7 @@ describe("Anthropic proxy", () => {
       version: "9.8.7-test",
     });
 
-    const response = await request(app).get("/health");
+    const response = await request(await serve(app)).get("/health");
 
     expect(response.status).toBe(200);
     expect(response.body).toEqual({
@@ -719,13 +794,123 @@ describe("Anthropic proxy", () => {
     });
     const app = appFor(upstream.url, { async score() { return new Map(); } });
 
-    const response = await request(app)
+    const response = await request(await serve(app))
       .post("/v1/messages")
       .set("content-type", "application/json")
       .send('{"messages":');
 
     expect(response.status).toBe(400);
     expect(upstream.requests).toHaveLength(0);
+  });
+  test("sends the routed model and the router's notice", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+
+    await request(
+      await serve(appWithRouter(upstream.url, hardRouter())),
+    )
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    const sent = upstream.requests[0]?.body as AnthropicRequest;
+    expect(sent.model).toBe("claude-fable-5-1");
+    expect(JSON.stringify(sent.messages.at(-1))).toContain(
+      "[jev-prune] Switched.",
+    );
+  });
+
+  test("resends on the original model when the routed model is rejected", async () => {
+    const upstream = await startUpstream((incoming, response) => {
+      const model = (incoming.body as AnthropicRequest).model;
+      response.writeHead(model === "claude-fable-5-1" ? 404 : 200, {
+        "content-type": "application/json",
+      });
+      response.end(JSON.stringify({ model }));
+    });
+    const confirmed: string[] = [];
+
+    const response = await request(
+      await serve(appWithRouter(upstream.url, hardRouter(confirmed))),
+    )
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(response.status).toBe(200);
+    expect(response.body).toEqual({ model: "claude-opus-5-5" });
+    expect(upstream.requests).toHaveLength(2);
+    const retried = upstream.requests[1]?.body as AnthropicRequest;
+    expect(retried.model).toBe("claude-opus-5-5");
+    expect(JSON.stringify(retried.messages.at(-1))).toContain(
+      "[jev-prune] Not available.",
+    );
+    expect(JSON.stringify(retried.messages.at(-1))).not.toContain(
+      "[jev-prune] Switched.",
+    );
+    expect(confirmed).toEqual(["s:abc"]);
+  });
+
+  test("returns the retry's error unchanged when the default model also fails", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end(JSON.stringify({ error: "prompt is too long" }));
+    });
+    const confirmed: string[] = [];
+
+    const response = await request(
+      await serve(appWithRouter(upstream.url, hardRouter(confirmed))),
+    )
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({ error: "prompt is too long" });
+    expect(upstream.requests).toHaveLength(2);
+    expect(confirmed).toEqual([]);
+  });
+
+  test("forwards unrouted when the router fails", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const router: RequestRouter = {
+      async route() {
+        throw new Error("router broke");
+      },
+    };
+
+    const response = await request(
+      await serve(appWithRouter(upstream.url, router)),
+    )
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(response.status).toBe(201);
+    expect(upstream.requests).toHaveLength(1);
+    const sent = upstream.requests[0]?.body as AnthropicRequest;
+    expect(sent.model).toBe("claude-opus-5-5");
+  });
+
+  test("does not retry a rejected request that was not routed", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(400, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const router: RequestRouter = {
+      async route() {
+        return {};
+      },
+    };
+
+    await request(
+      await serve(appWithRouter(upstream.url, router)),
+    )
+      .post("/v1/messages")
+      .send(routedRequest);
+
+    expect(upstream.requests).toHaveLength(1);
   });
 });
 

@@ -4,7 +4,9 @@ import { createApp } from "./app.js";
 import { loadConfig, type Config } from "./config.js";
 import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
+import { ModelRouter, routeChoice } from "./services/modelRouter.js";
 import { createFileStateStore } from "./services/pruneState.js";
+import { JevRelevanceScorer } from "./services/relevanceScorer.js";
 import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
 import { SkillShadow, skillRootsForProjects } from "./services/skillShadow.js";
@@ -18,8 +20,11 @@ import { sessionsDirectory } from "./installation.js";
 
 const SHUTDOWN_TIMEOUT_MS = 5_000;
 
-async function start(config: Config, logger: ReturnType<typeof createLogger>): Promise<void> {
-  const scorer = new JevService({
+async function start(
+  config: Config,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const jev = new JevService({
     apiKey: config.jevApiKey ?? "disabled",
     baseUrl: config.jevBaseUrl,
     model: config.jevModel,
@@ -28,10 +33,14 @@ async function start(config: Config, logger: ReturnType<typeof createLogger>): P
   });
   const pruner = new ContextPruner({
     config,
-    scorer,
+    scorer: new JevRelevanceScorer(jev),
     logger,
     stateStore: createFileStateStore(config.statePath),
   });
+  // Routing needs Jev; without a key every request keeps its model.
+  const router = config.jevApiKey
+    ? new ModelRouter(config, jev, routeChoice(config.statePath), logger)
+    : undefined;
   const upstreamAbort = new AbortController();
   const completionJudge = config.skillShadow
     ? new SkillCompletionJudge({
@@ -69,6 +78,7 @@ async function start(config: Config, logger: ReturnType<typeof createLogger>): P
           ),
         }
       : {}),
+    ...(router ? { router } : {}),
   });
   const server = createServer(app);
   let shuttingDown = false;

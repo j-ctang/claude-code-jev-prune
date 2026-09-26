@@ -1,7 +1,8 @@
 import { PruneError } from "../errors.js";
-import type { RelevanceScorer, ToolCandidate } from "../types.js";
+import type { NoulAsker, NoulQuestion } from "../types.js";
 
-const MAX_QUESTIONS_PER_REQUEST = 32;
+/** TypeSafe answers at most this many questions per request. */
+export const MAX_QUESTIONS_PER_REQUEST = 32;
 
 interface JevServiceOptions {
   apiKey: string;
@@ -16,7 +17,8 @@ interface NoulAnswer {
   noul: number;
 }
 
-export class JevService implements RelevanceScorer {
+/** The TypeSafe client: sends noul questions and validates the answers. */
+export class JevService implements NoulAsker {
   private readonly apiKey: string;
   private readonly baseUrl: string;
   private readonly model: string;
@@ -31,57 +33,22 @@ export class JevService implements RelevanceScorer {
     this.fetchFn = options.fetchFn;
   }
 
-  async score(
-    goal: string,
-    candidates: readonly ToolCandidate[],
+  /** Sends named noul questions about `state` and returns each answer by name. */
+  async ask(
+    state: Record<string, unknown>,
+    questions: Readonly<Record<string, NoulQuestion>>,
   ): Promise<ReadonlyMap<string, number>> {
-    const scores = new Map<string, number>();
-    for (
-      let offset = 0;
-      offset < candidates.length;
-      offset += MAX_QUESTIONS_PER_REQUEST
-    ) {
-      const batch = candidates.slice(
-        offset,
-        offset + MAX_QUESTIONS_PER_REQUEST,
+    const keys = Object.keys(questions);
+    if (keys.length > MAX_QUESTIONS_PER_REQUEST) {
+      throw new PruneError(
+        `TypeSafe accepts at most ${MAX_QUESTIONS_PER_REQUEST} questions per request`,
       );
-      const batchScores = await this.scoreBatch(goal, batch);
-      for (const [toolUseId, score] of batchScores) {
-        scores.set(toolUseId, score);
-      }
     }
-    return scores;
-  }
-
-  private async scoreBatch(
-    goal: string,
-    batch: readonly ToolCandidate[],
-  ): Promise<ReadonlyMap<string, number>> {
     const body = {
       model: this.model,
-      state: {
-        current_goal: goal,
-        candidates: batch.map((candidate, index) => ({
-          key: `candidate_${index}`,
-          tool_use_id: candidate.toolUseId,
-          tool_name: candidate.toolName,
-          input: candidate.input,
-          result: candidate.result,
-        })),
-      },
+      state,
       questions: Object.fromEntries(
-        batch.map((_candidate, index) => [
-          `candidate_${index}`,
-          {
-            type: "noul",
-            instructions: `Is candidates[${index}] still needed to complete current_goal?`,
-            criteria: {
-              true: "The current task depends on this tool input or result.",
-              false:
-                "The tool call is stale, superseded, exploratory, or unrelated to the current task.",
-            },
-          },
-        ]),
+        keys.map((key) => [key, { type: "noul", ...questions[key] }]),
       ),
     };
 
@@ -96,19 +63,20 @@ export class JevService implements RelevanceScorer {
     });
 
     if (!response.ok) {
-      throw new PruneError(`TypeSafe request failed with status ${response.status}`);
+      throw new PruneError(
+        `TypeSafe request failed with status ${response.status}`,
+      );
     }
 
     const payload: unknown = await response.json();
     const answers = this.readAnswers(payload);
     const scores = new Map<string, number>();
-    for (const [index, candidate] of batch.entries()) {
-      const key = `candidate_${index}`;
+    for (const key of keys) {
       const answer = answers[key];
       if (!this.isNoulAnswer(answer)) {
         throw new PruneError(`TypeSafe returned an invalid answer for ${key}`);
       }
-      scores.set(candidate.toolUseId, answer.noul);
+      scores.set(key, answer.noul);
     }
     return scores;
   }

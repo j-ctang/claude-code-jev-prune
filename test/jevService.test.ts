@@ -1,4 +1,5 @@
 import { JevService } from "../src/services/jevService.js";
+import { JevRelevanceScorer } from "../src/services/relevanceScorer.js";
 import type { ToolCandidate } from "../src/types.js";
 
 function candidate(toolUseId: string): ToolCandidate {
@@ -55,14 +56,72 @@ function createService(
   });
 }
 
+/** The pruning scorer over a real client, so request shapes are checked. */
+function scorerFor(fetchFn: typeof fetch): JevRelevanceScorer {
+  return new JevRelevanceScorer(createService(fetchFn));
+}
+
 describe("JevService", () => {
+  test("asks named noul questions about any state", async () => {
+    const captured: CapturedRequest[] = [];
+    const fetchFn: typeof fetch = async (input, init) => {
+      captured.push({ url: String(input), init });
+      return responseForBatch(String(init?.body));
+    };
+    const hard = {
+      instructions: "Is it hard?",
+      criteria: { true: "Hard.", false: "Easy." },
+    };
+    const continues = {
+      instructions: "Does it continue?",
+      criteria: { true: "Continues.", false: "New task." },
+    };
+
+    const answers = await createService(fetchFn).ask(
+      { newest_request: "Fix it" },
+      { hard, continues },
+    );
+
+    expect(answers).toEqual(
+      new Map([
+        ["hard", 0.91],
+        ["continues", 0.08],
+      ]),
+    );
+    expect(JSON.parse(String(captured[0]?.init?.body))).toEqual({
+      model: "jev-latest",
+      state: { newest_request: "Fix it" },
+      questions: {
+        hard: { type: "noul", ...hard },
+        continues: { type: "noul", ...continues },
+      },
+    });
+  });
+
+  test("ask rejects an invalid or missing answer", async () => {
+    const question = {
+      instructions: "Is it hard?",
+      criteria: { true: "Hard.", false: "Easy." },
+    };
+    const invalid: typeof fetch = async () =>
+      Response.json({ answers: { hard: { type: "noul", noul: 2 } } });
+    const missing: typeof fetch = async () => Response.json({ answers: {} });
+
+    await expect(
+      createService(invalid).ask({}, { hard: question }),
+    ).rejects.toThrow("TypeSafe returned an invalid answer for hard");
+    await expect(
+      createService(missing).ask({}, { hard: question }),
+    ).rejects.toThrow("TypeSafe returned an invalid answer for hard");
+  });
+
   test("sends named noul questions and returns scores by tool-use ID", async () => {
     const captured: CapturedRequest[] = [];
     const fetchFn: typeof fetch = async (input, init) => {
       captured.push({ url: String(input), init });
       return responseForBatch(String(init?.body));
     };
-    const service = createService(fetchFn);
+    const service = scorerFor(fetchFn);
 
     const scores = await service.score("Fix JWT validation", [
       candidate("call-a"),
@@ -138,7 +197,7 @@ describe("JevService", () => {
       batchSizes.push(Object.keys(request.questions).length);
       return responseForBatch(body);
     };
-    const service = createService(fetchFn);
+    const service = scorerFor(fetchFn);
     const candidates = Array.from({ length: 33 }, (_, index) =>
       candidate(`call-${index}`),
     );
@@ -157,7 +216,7 @@ describe("JevService", () => {
         new Response("sensitive upstream body", { status });
 
       await expect(
-        createService(fetchFn).score("goal", [candidate("call-a")]),
+        scorerFor(fetchFn).score("goal", [candidate("call-a")]),
       ).rejects.toThrow(`TypeSafe request failed with status ${status}`);
     },
   );
@@ -171,7 +230,7 @@ describe("JevService", () => {
       });
 
     await expect(
-      createService(fetchFn).score("goal", [candidate("call-a")]),
+      scorerFor(fetchFn).score("goal", [candidate("call-a")]),
     ).rejects.toThrow("TypeSafe returned an invalid answer for candidate_0");
   });
 
@@ -189,7 +248,7 @@ describe("JevService", () => {
       });
 
     await expect(
-      createService(fetchFn).score("goal", [candidate("call-a")]),
+      scorerFor(fetchFn).score("goal", [candidate("call-a")]),
     ).rejects.toThrow("TypeSafe returned an invalid answer for candidate_0");
   });
 });

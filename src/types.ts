@@ -61,6 +61,19 @@ export interface RelevanceScorer {
   ): Promise<ReadonlyMap<string, number>>;
 }
 
+/** One yes/no question for Jev; the answer is the probability of "true". */
+export interface NoulQuestion {
+  instructions: string;
+  criteria: { true: string; false: string };
+}
+
+export interface NoulAsker {
+  ask(
+    state: Record<string, unknown>,
+    questions: Readonly<Record<string, NoulQuestion>>,
+  ): Promise<ReadonlyMap<string, number>>;
+}
+
 export interface PruneResult {
   request: AnthropicRequest;
   beforeTokens: number;

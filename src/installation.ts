@@ -20,6 +20,8 @@ export const slashCommands = [
   "jev-prune.md",
   "jev-prune-auto.md",
   "jev-prune-auto-off.md",
+  "jev-route-auto.md",
+  "jev-route-off.md",
 ] as const;
 
 /** Launchers sharing the proxy on `port` register here. */

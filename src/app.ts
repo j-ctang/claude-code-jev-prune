@@ -1,10 +1,13 @@
 import express, { type Express } from "express";
 import type { Config } from "./config.js";
 import { createHealthHandler } from "./middleware/health.js";
+import { createProxyHandler } from "./middleware/proxy.js";
+import { CanaryPolicy } from "./services/canary.js";
 import {
-  createProxyHandler,
-  type ProxyDependencies,
-} from "./middleware/proxy.js";
+  MessagePreparer,
+  type RequestPruner,
+  type RequestRouter,
+} from "./services/messagePreparer.js";
 import type { ProxyStats } from "./types.js";
 import type { AppLogger } from "./utils/logger.js";
 import type { SkillShadowObserver } from "./services/skillShadowObserver.js";
@@ -12,7 +15,7 @@ import { VERSION } from "./version.js";
 
 interface AppDependencies {
   config: Config;
-  pruner: ProxyDependencies["pruner"];
+  pruner: RequestPruner;
   fetchFn: typeof fetch;
   logger: AppLogger;
   startedAt: number;
@@ -20,6 +23,7 @@ interface AppDependencies {
   version?: string;
   upstreamSignal?: AbortSignal;
   shadowObserver?: SkillShadowObserver;
+  router?: RequestRouter;
 }
 
 export function createApp(dependencies: AppDependencies): Express {
@@ -48,11 +52,18 @@ export function createApp(dependencies: AppDependencies): Express {
     "/v1",
     createProxyHandler({
       config: dependencies.config,
-      pruner: dependencies.pruner,
+      preparer: new MessagePreparer({
+        config: dependencies.config,
+        canary: new CanaryPolicy(dependencies.config, dependencies.logger),
+        pruner: dependencies.pruner,
+        router: dependencies.router,
+        shadowObserver: dependencies.shadowObserver,
+        logger: dependencies.logger,
+        stats,
+      }),
       fetchFn: dependencies.fetchFn,
       logger: dependencies.logger,
       stats,
-      ...(dependencies.shadowObserver ? { shadowObserver: dependencies.shadowObserver } : {}),
       ...(dependencies.upstreamSignal
         ? { upstreamSignal: dependencies.upstreamSignal }
         : {}),
