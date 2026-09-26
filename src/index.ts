@@ -4,9 +4,8 @@ import { createApp } from "./app.js";
 import { loadConfig, type Config } from "./config.js";
 import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
-import { ModelRouter } from "./services/modelRouter.js";
+import { ModelRouter, routeChoice } from "./services/modelRouter.js";
 import { createFileStateStore } from "./services/pruneState.js";
-import { RouteMode, routeModePath } from "./services/routeMode.js";
 import { shutdownServer } from "./serverLifecycle.js";
 import { createLogger } from "./utils/logger.js";
 
@@ -34,7 +33,7 @@ function start(
     ? new ModelRouter(
         config,
         scorer,
-        new RouteMode(routeModePath(config.statePath)),
+        routeChoice(config.statePath),
         logger,
       )
     : undefined;

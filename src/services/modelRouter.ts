@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { AnthropicRequest, NoulAsker, NoulQuestion } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
-import type { RouteMode } from "./routeMode.js";
+import { SavedChoice } from "./savedChoice.js";
 import { remember } from "../utils/recency.js";
 import { isSideRequest, type Conversation } from "./conversation.js";
 import { readTurn, type Turn } from "./turn.js";
@@ -79,6 +79,18 @@ const OFF_NOTICE =
 const SAVE_FAILED_NOTICE =
   "[jev-prune] Could not save the model routing setting.";
 
+export type RouteChoice = "ask" | "auto" | "off";
+
+/** The saved routing choice, next to the pruning state; `ask` until answered. */
+export function routeChoice(statePath: string): SavedChoice<RouteChoice> {
+  return new SavedChoice<RouteChoice>(
+    `${statePath}.route-mode.json`,
+    "choice",
+    "ask",
+    (value): value is RouteChoice => value === "auto" || value === "off",
+  );
+}
+
 type SwitchReason =
   | { reason: "opt-in" }
   | { reason: "hard" | "new-easy-task"; hard: number; continues: number };
@@ -110,7 +122,7 @@ export class ModelRouter {
   constructor(
     private readonly config: RouterConfig,
     private readonly asker: NoulAsker,
-    private readonly mode: RouteMode,
+    private readonly mode: SavedChoice<RouteChoice>,
     private readonly logger: AppLogger,
     /** Tests lower this to check eviction. */
     private readonly maxConversations = MAX_CONVERSATIONS,
@@ -122,7 +134,7 @@ export class ModelRouter {
   ): Promise<RouteDecision> {
     const turn = readTurn(request);
     const command = this.applyCommand(turn.command);
-    if (this.mode.choice === "off" || !this.eligible(request)) {
+    if (this.mode.value === "off" || !this.eligible(request)) {
       return command ? { notice: command.notice } : {};
     }
     const state = this.stateFor(conversation);
@@ -149,7 +161,7 @@ export class ModelRouter {
       );
     }
     // With notices off, ask mode can never ask, so Jev is not needed.
-    const silentAsk = this.mode.choice === "ask" && !this.config.notify;
+    const silentAsk = this.mode.value === "ask" && !this.config.notify;
     if (turn.command || silentAsk) {
       return this.decision(conversation, state, command?.notice);
     }
@@ -189,7 +201,7 @@ export class ModelRouter {
       { hard, continues },
       this.config,
     );
-    if (move === "up" && this.mode.choice === "ask") {
+    if (move === "up" && this.mode.value === "ask") {
       // Only the main thread can reach the user; subagents stay put.
       if (!this.config.notify || !main) return undefined;
       state.askedHard = true;

@@ -164,7 +164,7 @@ For testing without Fable credit: `JEV_ROUTE_DEFAULT_MODEL=claude-sonnet-5` and
 | Unit | Responsibility |
 | --- | --- |
 | `src/services/jevService.ts` | Add a generic `ask(state, questions)` that sends `noul` questions and validates answers. `score()` uses it. |
-| `src/services/routeMode.ts` | Load and save the `ask` / `auto` / `off` choice. |
+| `src/services/savedChoice.ts` | Load and save a slash-command choice; `routeChoice()` in the router holds `ask` / `auto` / `off`. |
 | `src/services/modelRouter.ts` | Keep per-conversation state, handle the route commands, call Jev, apply the policy table, and return the model to send plus an optional notice. |
 | `src/services/turn.ts` | Add `previousGoal` (the user text before the newest one) for the `continues` question. |
 | `src/services/messagePreparer.ts` | Check the canary, prune and route at the same time, add every notice, and send with the router's fallback. |

@@ -15,7 +15,7 @@ import { findCanaryCandidates, type CanaryCandidate } from "./setupCanary.js";
 import { defaultStatePath, hasRealKey } from "./config.js";
 import { envPath, repository } from "./checkout.js";
 import { commandsDirectory, slashCommands } from "./installation.js";
-import { CanaryMode, canaryModePath } from "./services/canaryMode.js";
+import { canaryAutoPrune } from "./services/canary.js";
 
 function setEnv(raw: string, name: string, value: string): string {
   const line = `${name}=${JSON.stringify(value)}`;
@@ -121,7 +121,7 @@ async function main(): Promise<void> {
     writeFileSync(envPath, raw, { mode: 0o600 });
     chmodSync(envPath, 0o600);
     const statePath = parse(raw).JEV_PRUNE_STATE_PATH || defaultStatePath;
-    new CanaryMode(canaryModePath(statePath)).setAutoPrune(false);
+    canaryAutoPrune(statePath).set(false);
 
     mkdirSync(commandsDirectory, { recursive: true, mode: 0o700 });
     for (const command of slashCommands) {

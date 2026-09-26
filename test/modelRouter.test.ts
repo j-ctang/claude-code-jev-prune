@@ -5,8 +5,11 @@ import {
   identifyConversation,
   type Conversation,
 } from "../src/services/conversation.js";
-import { ModelRouter, nextMove } from "../src/services/modelRouter.js";
-import { RouteMode } from "../src/services/routeMode.js";
+import {
+  ModelRouter,
+  nextMove,
+  routeChoice,
+} from "../src/services/modelRouter.js";
 import type { AnthropicRequest, Message, NoulAsker } from "../src/types.js";
 import type { AppLogger } from "../src/utils/logger.js";
 
@@ -84,7 +87,7 @@ const thread = (session = "s", agent?: string): Conversation =>
 
 async function router(asker: NoulAsker, choice?: "auto" | "off") {
   const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "mode.json");
-  const mode = new RouteMode(path);
+  const mode = routeChoice(path);
   if (choice) mode.set(choice);
   return { router: new ModelRouter(config, asker, mode, silentLogger), path };
 }
@@ -328,7 +331,7 @@ describe("ModelRouter in auto mode", () => {
 describe("ModelRouter memory", () => {
   test("evicts the least recently used conversation", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
-    const mode = new RouteMode(path);
+    const mode = routeChoice(path);
     mode.set("auto");
     const subject = new ModelRouter(
       config,
@@ -364,7 +367,7 @@ describe("ModelRouter in ask mode", () => {
     expect(asked.notice).toContain("/jev-route-auto");
     expect(accepted.model).toBe(HARD);
     expect(accepted.notice).toContain("continue their previous request");
-    expect(new RouteMode(path).choice).toBe("auto");
+    expect(routeChoice(path).value).toBe("auto");
   });
 
   test("a skipped question does not resume on a later /jev-route-auto", async () => {
@@ -386,7 +389,7 @@ describe("ModelRouter in ask mode", () => {
 
   test("a failed save does not switch up", async () => {
     const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
-    const mode = new RouteMode(path);
+    const mode = routeChoice(path);
     mode.set = () => {
       throw new Error("disk full");
     };
@@ -430,7 +433,7 @@ describe("ModelRouter in ask mode", () => {
     expect(off.notice).toContain("Automatic model routing is off");
     expect(later).toEqual({});
     expect(asker.calls).toBe(0);
-    expect(new RouteMode(path).choice).toBe("off");
+    expect(routeChoice(path).value).toBe("off");
   });
 
   test("asks only in the session's main conversation", async () => {
@@ -459,7 +462,7 @@ describe("ModelRouter in ask mode", () => {
     const subject = new ModelRouter(
       { ...config, notify: false },
       asker,
-      new RouteMode(path),
+      routeChoice(path),
       silentLogger,
     );
 

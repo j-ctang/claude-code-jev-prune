@@ -44,7 +44,7 @@ Express application
 | `src/services/canary.ts` | Watch the main thread's response canary and handle `/jev-prune-auto` commands. |
 | `src/services/conversation.ts` | Tell the main thread from subagents by header and key each thread. |
 | `src/services/modelRouter.ts` | Decide per conversation whether to move a hard prompt to the hard model and back, and handle `/jev-route-*` commands. |
-| `src/services/routeMode.ts` | Save the `ask` / `auto` / `off` routing choice. |
+| `src/services/savedChoice.ts` | Save a slash-command choice across restarts: canary auto-prune and the `ask` / `auto` / `off` routing choice. |
 | `src/services/messagePreparer.ts` | Turn one `/v1/messages` request into what is sent: canary, prune and route, notices for Claude, and the routed-model fallback. |
 | `src/middleware/proxy.ts` | Forward headers/body and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |

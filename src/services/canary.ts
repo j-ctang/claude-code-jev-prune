@@ -1,7 +1,7 @@
 import type { Config } from "../config.js";
 import type { AnthropicRequest } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
-import { CanaryMode, canaryModePath } from "./canaryMode.js";
+import { SavedChoice } from "./savedChoice.js";
 import type { Conversation } from "./conversation.js";
 import { readTurn, type Turn } from "./turn.js";
 
@@ -32,6 +32,19 @@ export class CanaryMonitor {
   }
 }
 
+/** The saved choice to prune automatically on canary misses. */
+export function canaryAutoPrune(
+  statePath: string,
+  fallback = false,
+): SavedChoice<boolean> {
+  return new SavedChoice(
+    `${statePath}.canary-mode.json`,
+    "autoPrune",
+    fallback,
+    (value): value is boolean => typeof value === "boolean",
+  );
+}
+
 export interface CanaryDecision {
   /** Prune on this request, as if the user ran /jev-prune. */
   prune: boolean;
@@ -53,15 +66,15 @@ const MISS_NOTICE =
  */
 export class CanaryPolicy {
   private readonly monitor: CanaryMonitor;
-  private readonly mode: CanaryMode;
+  private readonly autoPrune: SavedChoice<boolean>;
 
   constructor(
     config: Pick<Config, "canaryPrefix" | "canaryAction" | "statePath">,
     private readonly logger: AppLogger,
   ) {
     this.monitor = new CanaryMonitor(config.canaryPrefix ?? "");
-    this.mode = new CanaryMode(
-      canaryModePath(config.statePath),
+    this.autoPrune = canaryAutoPrune(
+      config.statePath,
       config.canaryAction === "prune",
     );
   }
@@ -76,7 +89,7 @@ export class CanaryPolicy {
       conversation.main &&
       this.monitor.observe(conversation.key, turn),
     );
-    if (missed && this.mode.autoPrune) {
+    if (missed && this.autoPrune.value) {
       this.logger.warn("canary_prune_requested", { sessionId });
       return { prune: true, notice: commandNotice };
     }
@@ -91,7 +104,7 @@ export class CanaryPolicy {
     const enable = AUTO_COMMANDS[command ?? ""];
     if (enable === undefined || !this.monitor.enabled) return undefined;
     try {
-      this.mode.setAutoPrune(enable);
+      this.autoPrune.set(enable);
       return enable
         ? "[jev-prune] Automatic pruning on future canary misses is enabled."
         : "[jev-prune] Automatic pruning on canary misses is disabled.";
