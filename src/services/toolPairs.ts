@@ -93,12 +93,12 @@ export function extractCandidates(request: AnthropicRequest): ToolCandidate[] {
 }
 
 /**
- * What a dropped tool call's result becomes. It says when the output went
- * away: a stub that just says "removed" led Claude, in live Claude Code
- * sessions, to decide it never saw the output and had made up its answers.
+ * What a dropped tool call's result becomes. It ties the removal to a later
+ * user message: vaguer stubs led Claude, in live Claude Code sessions, to
+ * decide it never saw the output and to retract answers that were right.
  */
 export const DROPPED_STUB =
-  "[jev-prune] Removed afterwards to save context. When this call ran you received the full output, and your replies after it were based on that real output.";
+  "[jev-prune] Pruned from context later, when the user sent a newer message. Every reply you gave before that saw the full output, so those replies were based on the real output.";
 
 const MAX_KEPT_INPUT_CHARS = 200;
 const REMOVED_INPUT = "[jev-prune] Removed.";
