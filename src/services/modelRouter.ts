@@ -182,6 +182,7 @@ export class ModelRouter {
         conversation,
         state,
         `[jev-prune] Automatic model routing is on. This conversation now uses ${this.config.routeHardModel}. Tell the user in one short line, then continue their previous request.`,
+        true,
       );
     }
     // With notices off, ask mode can never ask, so Jev is not needed.
@@ -311,15 +312,20 @@ export class ModelRouter {
     return state;
   }
 
+  /** `resumes`: the user's message is the opt-in, so the work is the prompt before it. */
   private decision(
     conversation: string,
     state: ConversationState,
     notice: string | undefined,
+    resumes = false,
   ): RouteDecision {
     const routed = state.model !== this.config.routeDefaultModel;
     return {
       ...(routed
-        ? { model: state.model, fallback: this.fallback(conversation, state) }
+        ? {
+            model: state.model,
+            fallback: this.fallback(conversation, state, resumes),
+          }
         : {}),
       ...(notice ? { notice } : {}),
     };
@@ -332,12 +338,13 @@ export class ModelRouter {
   private fallback(
     conversation: string,
     state: ConversationState,
+    resumes: boolean,
   ): RouteFallback {
     const { routeDefaultModel, routeHardModel } = this.config;
     return {
       retries: (rejection) =>
         rejection.status === 400 || refusesModel(rejection),
-      notice: `[jev-prune] ${routeHardModel} rejected this request, so this conversation stays on ${routeDefaultModel}. Tell the user in one short line.`,
+      notice: `[jev-prune] ${routeHardModel} rejected this request, so this conversation stays on ${routeDefaultModel}. Tell the user in one short line${resumes ? ", then continue their previous request" : ""}.`,
       confirm: (rejection) => {
         const everywhere = refusesModel(rejection);
         this.logger.warn("route_model_unavailable", {

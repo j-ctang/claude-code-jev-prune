@@ -421,6 +421,10 @@ describe("ModelRouter in ask mode", () => {
     expect(asked.notice).toContain("/jev-route-auto");
     expect(accepted.model).toBe(HARD);
     expect(accepted.notice).toContain("continue their previous request");
+    // If the hard model refuses, the resend must still do the paused request.
+    expect(accepted.fallback?.notice).toContain(
+      "continue their previous request",
+    );
     expect(routeChoice(path).value).toBe("auto");
   });
 
