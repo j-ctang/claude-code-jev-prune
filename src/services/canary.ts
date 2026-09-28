@@ -57,8 +57,9 @@ const AUTO_COMMANDS: Record<string, boolean | undefined> = {
   "jev-prune-auto-off": false,
 };
 
+/** Only the user can run the commands, so Claude is told to pass them on. */
 const MISS_NOTICE =
-  "[jev-prune] The configured response prefix was missed again. This is an advisory signal; run /jev-prune now or /jev-prune-auto to prune automatically on future misses.";
+  "[jev-prune] The configured response prefix was missed again. This is an advisory signal. Tell the user in one short line that they can run /jev-prune now, or /jev-prune-auto to prune automatically on future misses.";
 
 /**
  * Decides what a missed response canary means for one request: handles the

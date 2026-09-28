@@ -345,7 +345,9 @@ describe("Anthropic proxy", () => {
       .set("x-claude-code-session-id", "s")
       .send(second);
 
-    expect(JSON.stringify(upstream.requests[1]?.body)).toContain("/jev-prune");
+    const sent = JSON.stringify(upstream.requests[1]?.body);
+    expect(sent).toContain("Tell the user");
+    expect(sent).toContain("/jev-prune");
   });
 
   test("automatically requests a prune on the second canary miss when opted in", async () => {
