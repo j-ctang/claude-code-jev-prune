@@ -1223,6 +1223,20 @@ describe("ContextPruner", () => {
       expect(result.reason).toBe("no-candidates");
       expect(result.notice).toMatch(/no eligible tool results/);
     });
+
+    test("stays quiet when a canary prune finds nothing eligible", async () => {
+      const pruner = new ContextPruner({
+        config: config({ ...highThreshold, keepRecent: 5, notify: true }),
+        scorer: scorerReturning({}),
+      });
+      const result = await pruner.prune(twoToolRequest, {
+        sessionId: "session-a",
+        trigger: "canary",
+      });
+
+      expect(result.reason).toBe("no-candidates");
+      expect(result.notice).toBeUndefined();
+    });
   });
 
   test("uses the latest non-tool user text as the goal", async () => {

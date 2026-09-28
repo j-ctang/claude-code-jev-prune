@@ -127,7 +127,7 @@ export class ContextPruner {
         );
         return result.reason === "below-threshold"
           ? belowThreshold(result)
-          : this.withNothingToPrune(result, manual);
+          : this.withNothingToPrune(result, trigger);
       }
 
       // Saved decisions first, so the pruned prefix stays byte-identical.
@@ -241,7 +241,7 @@ export class ContextPruner {
           "no-candidates",
         );
         return eligible.length === 0
-          ? this.withNothingToPrune(result, manual)
+          ? this.withNothingToPrune(result, trigger)
           : result;
       }
 
@@ -379,15 +379,19 @@ export class ContextPruner {
           };
   }
 
+  /**
+   * Answers only a /jev-prune the user typed. A canary prune was not asked
+   * for, so finding nothing is not worth telling the user.
+   */
   private withNothingToPrune(
     result: PruneResult,
-    manual: boolean,
+    trigger: PruneTrigger | undefined,
   ): PruneResult {
-    if (!manual) return result;
+    if (trigger !== "manual") return result;
     const notice = nothingToPruneNotice(this.config);
     return {
       ...result,
-      manual,
+      manual: true,
       notice,
           };
   }
