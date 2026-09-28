@@ -79,6 +79,11 @@ function toolLoop(texts: string[]): AnthropicRequest {
   };
 }
 
+const rejection = (status: number, headers: Record<string, string> = {}) => ({
+  status,
+  headers: new Headers(headers),
+});
+
 const command = (name: string) => `<command-name>/${name}</command-name>`;
 
 /** The main thread of `session`, or one of its subagents. */
@@ -298,13 +303,18 @@ describe("ModelRouter in auto mode", () => {
     );
 
     const { fallback } = await subject.route(turn(["Redesign auth"]), thread());
+    const retries = (status: number, headers: Record<string, string> = {}) =>
+      fallback?.retries({ status, headers: new Headers(headers) });
 
-    expect([400, 403, 404].map((status) => fallback?.retries(status))).toEqual([
+    expect([400, 403, 404].map((status) => retries(status))).toEqual([
       true,
       true,
       true,
     ]);
-    expect([401, 429, 500].map((status) => fallback?.retries(status))).toEqual([
+    // A plan without the model gets a 429 the API marks as not retryable.
+    expect(retries(429, { "x-should-retry": "false" })).toBe(true);
+    expect(retries(429, { "x-should-retry": "true" })).toBe(false);
+    expect([401, 429, 500].map((status) => retries(status))).toEqual([
       false,
       false,
       false,
@@ -312,20 +322,48 @@ describe("ModelRouter in auto mode", () => {
     expect(fallback?.notice).toContain(`${HARD} rejected this request`);
   });
 
-  test("a confirmed rejection stops routing the conversation", async () => {
-    const { router: subject } = await router(
-      scriptedAsker({ hard: 0.9, continues: 0 }, { hard: 0.9, continues: 0 }),
-      "auto",
+  test("a confirmed 400 stops routing only that conversation", async () => {
+    const asker = scriptedAsker(
+      { hard: 0.9, continues: 0 },
+      { hard: 0.9, continues: 0 },
     );
+    const { router: subject } = await router(asker, "auto");
 
     const first = await subject.route(turn(["Redesign auth"]), thread());
-    first.fallback?.confirm();
+    first.fallback?.confirm(rejection(400));
     const next = await subject.route(
       turn(["Redesign auth", "Redesign billing"]),
       thread(),
     );
+    const other = await subject.route(turn(["Redesign auth"]), thread("t"));
 
     expect(next).toEqual({});
+    expect(other.model).toBe(HARD);
+  });
+
+  test("a confirmed model rejection stops routing every conversation", async () => {
+    for (const refused of [
+      rejection(404),
+      rejection(429, { "x-should-retry": "false" }),
+    ]) {
+      const asker = scriptedAsker({ hard: 0.9, continues: 0 });
+      const { router: subject } = await router(asker);
+      // Opt in, then route up and have the hard model refused.
+      await subject.route(turn(["Redesign auth"]), thread());
+      const first = await subject.route(
+        turn(["Redesign auth", command("jev-route-auto")]),
+        thread(),
+      );
+      first.fallback?.confirm(refused);
+      const other = await subject.route(
+        turn(["Redesign billing"]),
+        thread("t"),
+      );
+
+      // No other conversation is routed, or asked about a model it can't use.
+      expect(other).toEqual({});
+      expect(asker.calls).toBe(1);
+    }
   });
 
   test("an unconfirmed rejection keeps routing", async () => {
@@ -383,6 +421,10 @@ describe("ModelRouter in ask mode", () => {
     expect(asked.notice).toContain("/jev-route-auto");
     expect(accepted.model).toBe(HARD);
     expect(accepted.notice).toContain("continue their previous request");
+    // If the hard model refuses, the resend must still do the paused request.
+    expect(accepted.fallback?.notice).toContain(
+      "continue their previous request",
+    );
     expect(routeChoice(path).value).toBe("auto");
   });
 

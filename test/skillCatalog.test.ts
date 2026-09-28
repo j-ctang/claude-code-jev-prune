@@ -95,7 +95,11 @@ test("refreshes while the proxy is idle", async () => {
     skill(root, "pdf");
     await catalog.start();
     skill(root, "report", `${body} The report procedure is different.`);
-    await new Promise((resolve) => setTimeout(resolve, 40));
+    // Waits for the background refresh; a fixed sleep flaked under load.
+    const deadline = Date.now() + 5_000;
+    while (catalog.entries().length < 2 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     expect(catalog.entries().map((entry) => entry.skill)).toEqual(["pdf", "report"]);
   } finally {
     catalog.stop();

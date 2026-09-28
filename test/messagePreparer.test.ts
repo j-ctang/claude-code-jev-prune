@@ -1,5 +1,6 @@
 import {
   MessagePreparer,
+  THINKING_BINDING_BETA,
   type RequestRouter,
 } from "../src/services/messagePreparer.js";
 import { identifyConversation } from "../src/services/conversation.js";
@@ -62,35 +63,51 @@ const response = (status: number) =>
     headers: { "content-type": "application/json" },
   });
 
-test("times the prune without the routing wait", async () => {
-  const { subject, events } = preparer({
-    async route() {
-      await sleep(200);
-      return {};
-    },
+describe("with a fake clock", () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+  });
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
-  await subject.prepare(request, main);
-
-  const complete = events.find((event) => event.message === "prune_complete");
-  expect(complete?.metadata?.durationMs).toBeLessThan(150);
-});
-
-test("prunes and routes at the same time", async () => {
-  const { subject } = preparer(
-    {
-      async route() {
-        await sleep(150);
-        return {};
+  test("times the prune without the routing wait", async () => {
+    const { subject, events } = preparer(
+      {
+        async route() {
+          await sleep(200);
+          return {};
+        },
       },
-    },
-    150,
-  );
+      30,
+    );
 
-  const startedAt = Date.now();
-  await subject.prepare(request, main);
+    const prepared = subject.prepare(request, main);
+    await jest.advanceTimersByTimeAsync(200);
+    await prepared;
 
-  expect(Date.now() - startedAt).toBeLessThan(280);
+    const complete = events.find((event) => event.message === "prune_complete");
+    expect(complete?.metadata?.durationMs).toBe(30);
+  });
+
+  test("prunes and routes at the same time", async () => {
+    const { subject } = preparer(
+      {
+        async route() {
+          await sleep(150);
+          return {};
+        },
+      },
+      150,
+    );
+
+    const startedAt = Date.now();
+    const prepared = subject.prepare(request, main);
+    await jest.advanceTimersByTimeAsync(150);
+    await prepared;
+
+    expect(Date.now() - startedAt).toBe(150);
+  });
 });
 
 test("confirms a rejection only when the resend succeeds", async () => {
@@ -100,7 +117,7 @@ test("confirms a rejection only when the resend succeeds", async () => {
       return {
         model: "claude-fable-5-1",
         fallback: {
-          retries: (status) => status === 400,
+          retries: ({ status }) => status === 400,
           notice: "[jev-prune] Rejected.",
           confirm: () => confirmed.push(1),
         },
@@ -157,4 +174,85 @@ test("does not resend a status the router keeps", async () => {
 
   expect(upstream.status).toBe(429);
   expect(sends).toBe(1);
+});
+
+test("keeps an earlier turn's notice on later requests", async () => {
+  let calls = 0;
+  const { subject } = preparer({
+    async route() {
+      calls += 1;
+      return calls === 1 ? { notice: "[jev-prune] Switched." } : {};
+    },
+  });
+  const sent: AnthropicRequest[] = [];
+  const send = async (body: AnthropicRequest) => {
+    sent.push(body);
+    return response(200);
+  };
+
+  await (await subject.prepare(request, main)).send(send);
+  await (
+    await subject.prepare(
+      {
+        ...request,
+        messages: [
+          ...request.messages,
+          { role: "assistant", content: "Done." },
+          { role: "user", content: "Add tests" },
+        ],
+      },
+      main,
+    )
+  ).send(send);
+
+  expect(sent[1]?.messages[0]).toEqual(sent[0]?.messages[0]);
+  expect(JSON.stringify(sent[1]?.messages[0])).toContain("Switched");
+});
+
+test("lets the API drop mismatched thinking only on requests it changed", async () => {
+  const thinking = { type: "adaptive", display: "omitted" };
+  const calls: Array<{ body: AnthropicRequest; beta?: string | undefined }> =
+    [];
+  const send = async (body: AnthropicRequest, beta?: string) => {
+    calls.push({ body, beta });
+    return response(200);
+  };
+  const untouched = preparer({ route: async () => ({}) }).subject;
+  const routed = preparer({
+    route: async () => ({ model: "claude-fable-5-1" }),
+  }).subject;
+
+  await (await untouched.prepare({ ...request, thinking }, main)).send(send);
+  await (await routed.prepare({ ...request, thinking }, main)).send(send);
+
+  expect(calls[0]?.beta).toBeUndefined();
+  expect(calls[0]?.body.thinking).toEqual(thinking);
+  expect(calls[1]?.beta).toBe(THINKING_BINDING_BETA);
+  expect(calls[1]?.body.thinking).toEqual({
+    ...thinking,
+    block_binding: { prefix_mismatch_behavior: "drop_block" },
+  });
+});
+
+test("leaves a changed request alone when it has no thinking to drop", async () => {
+  const calls: Array<{ body: AnthropicRequest; beta?: string | undefined }> =
+    [];
+  const send = async (body: AnthropicRequest, beta?: string) => {
+    calls.push({ body, beta });
+    return response(200);
+  };
+  const routed = preparer({
+    route: async () => ({ model: "claude-sonnet-5" }),
+  }).subject;
+  const disabled = { type: "disabled" };
+
+  await (
+    await routed.prepare({ ...request, thinking: disabled }, main)
+  ).send(send);
+  await (await routed.prepare(request, main)).send(send);
+
+  // The API rejects `block_binding` beside disabled thinking with a 400.
+  expect(calls[0]?.body.thinking).toEqual(disabled);
+  expect(calls[1]?.body.thinking).toBeUndefined();
+  expect(calls.map((call) => call.beta)).toEqual([undefined, undefined]);
 });

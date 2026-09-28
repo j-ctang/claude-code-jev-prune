@@ -187,7 +187,7 @@ const hardRouter = (confirmed: string[] = []): RequestRouter => ({
       model: "claude-fable-5-1",
       notice: "[jev-prune] Switched.",
       fallback: {
-        retries: (status) => status === 400 || status === 404,
+        retries: ({ status }) => status === 400 || status === 404,
         notice: "[jev-prune] Not available.",
         confirm: () => confirmed.push("s:abc"),
       },
@@ -345,7 +345,9 @@ describe("Anthropic proxy", () => {
       .set("x-claude-code-session-id", "s")
       .send(second);
 
-    expect(JSON.stringify(upstream.requests[1]?.body)).toContain("/jev-prune");
+    const sent = JSON.stringify(upstream.requests[1]?.body);
+    expect(sent).toContain("Tell the user");
+    expect(sent).toContain("/jev-prune");
   });
 
   test("automatically requests a prune on the second canary miss when opted in", async () => {
@@ -819,6 +821,32 @@ describe("Anthropic proxy", () => {
     expect(JSON.stringify(sent.messages.at(-1))).toContain(
       "[jev-prune] Switched.",
     );
+  });
+
+  test("adds the thinking-binding beta once to a changed request", async () => {
+    const upstream = await startUpstream((_incoming, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("{}");
+    });
+    const app = await serve(appWithRouter(upstream.url, hardRouter()));
+    const thinking = { ...routedRequest, thinking: { type: "adaptive" } };
+
+    await request(app)
+      .post("/v1/messages")
+      .set("anthropic-beta", "claude-code-20250219")
+      .send(thinking);
+    await request(app)
+      .post("/v1/messages")
+      .set(
+        "anthropic-beta",
+        "claude-code-20250219,thinking-binding-controls-2026-08-01",
+      )
+      .send(thinking);
+
+    expect(upstream.requests.map((sent) => sent.headers["anthropic-beta"])).toEqual([
+      "claude-code-20250219,thinking-binding-controls-2026-08-01",
+      "claude-code-20250219,thinking-binding-controls-2026-08-01",
+    ]);
   });
 
   test("resends on the original model when the routed model is rejected", async () => {

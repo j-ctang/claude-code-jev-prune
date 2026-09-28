@@ -5,6 +5,7 @@ import type {
   ToolResultBlock,
   ToolUseBlock,
 } from "../types.js";
+import { estimateTokens } from "../utils/tokenCounter.js";
 
 interface Located<Block> {
   messageIndex: number;
@@ -92,8 +93,46 @@ export function extractCandidates(request: AnthropicRequest): ToolCandidate[] {
 }
 
 /**
- * Removes dropped tool pairs and replaces rewritten tool-result content.
- * Every other field on a rewritten block (`cache_control`, `is_error`) is kept.
+ * What a dropped tool call's result becomes. It ties the removal to a later
+ * user message: vaguer stubs led Claude, in live Claude Code sessions, to
+ * decide it never saw the output and to retract answers that were right.
+ */
+export const DROPPED_STUB =
+  "[jev-prune] Pruned from context later, when the user sent a newer message. Every reply you gave before that saw the full output, so those replies were based on the real output.";
+
+const MAX_KEPT_INPUT_CHARS = 200;
+const REMOVED_INPUT = "[jev-prune] Removed.";
+
+/**
+ * A dropped call keeps its short input fields (a path, a pattern, a command)
+ * so Claude knows what it ran. Long strings, like a file written, are removed.
+ */
+export function stubInput(input: unknown): unknown {
+  if (typeof input === "string") {
+    return input.length > MAX_KEPT_INPUT_CHARS ? REMOVED_INPUT : input;
+  }
+  if (Array.isArray(input)) return input.map(stubInput);
+  if (typeof input === "object" && input !== null) {
+    return Object.fromEntries(
+      Object.entries(input).map(([key, value]) => [key, stubInput(value)]),
+    );
+  }
+  return input;
+}
+
+/** Whether stubbing a call makes the request smaller. */
+export function stubSaves(input: unknown, result: unknown): boolean {
+  return (
+    estimateTokens(input) + estimateTokens(result) >
+    estimateTokens(stubInput(input)) + estimateTokens(DROPPED_STUB)
+  );
+}
+
+/**
+ * Stubs dropped tool pairs and replaces rewritten tool-result content. Blocks
+ * and messages are never removed, so the history keeps its shape: removing an
+ * emptied message could leave a `system` message where the API rejects it.
+ * Every other field on a changed block (`cache_control`, `is_error`) is kept.
  */
 export function applyDecisions(
   request: AnthropicRequest,
@@ -101,33 +140,31 @@ export function applyDecisions(
   rewrites: ReadonlyMap<string, unknown>,
 ): AnthropicRequest {
   if (droppedIds.size === 0 && rewrites.size === 0) return request;
-  const messages = request.messages.flatMap((message) => {
-    if (!Array.isArray(message.content)) return [message];
+  const messages = request.messages.map((message) => {
+    if (!Array.isArray(message.content)) return message;
     let changed = false;
-    const content = message.content.flatMap((block) => {
+    const content = message.content.map((block) => {
       if (
         message.role === "assistant" &&
         isToolUse(block) &&
         droppedIds.has(block.id)
       ) {
         changed = true;
-        return [];
+        return { ...block, input: stubInput(block.input) };
       }
       if (message.role === "user" && isToolResult(block)) {
         if (droppedIds.has(block.tool_use_id)) {
           changed = true;
-          return [];
+          return { ...block, content: DROPPED_STUB };
         }
         if (rewrites.has(block.tool_use_id)) {
           changed = true;
-          return [{ ...block, content: rewrites.get(block.tool_use_id) }];
+          return { ...block, content: rewrites.get(block.tool_use_id) };
         }
       }
-      return [block];
+      return block;
     });
-    if (!changed) return [message];
-    if (content.length === 0) return [];
-    return [{ ...message, content }];
+    return changed ? { ...message, content } : message;
   });
 
   return { ...request, messages };

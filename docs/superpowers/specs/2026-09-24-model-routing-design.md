@@ -122,15 +122,20 @@ because the proxy is shared and reused.
 ## Fallback when the hard model is unavailable
 
 A Pro account, or a Max account without Fable credit, can't use Fable 5.1. When a
-routed request gets an upstream 4xx response (400, 403, or 404) before any body
-is streamed:
+routed request gets an upstream 400, 403, or 404, or a 429 with
+`x-should-retry: false`, before any body is streamed. A Max account without Fable
+credit gets that 429: `rate_limit_error`, "Usage credits are required for this
+model.", `error_code: credits_required` (verified live 2026-09-26). A plain 429
+rate limit is not resent.
 
 1. Discard the response body.
 2. Resend the same request with the original model, with a notice:
    "[jev-prune] claude-fable-5-1 rejected this request, so this conversation
    stays on claude-opus-5-5."
 3. If the resend succeeds, the routed model caused the rejection: mark the
-   conversation as `unavailable`. It is never routed again.
+   conversation as `unavailable`. It is never routed again. After a 403, 404,
+   or non-retryable 429 the account can't use the model at all, so no
+   conversation is routed or asked about routing until the proxy restarts.
 4. If the resend fails too, the request itself was bad (for example, "prompt
    is too long"). Return that error and keep routing.
 
@@ -207,7 +212,8 @@ traffic:
 - Two conversations in one session keep separate state.
 - Jev failure keeps the current model.
 - Unavailable hard model: the proxy resends on the original model, marks the
-  conversation `unavailable`, and adds a notice.
+  conversation `unavailable`, and adds a notice. A 403, 404, or credits-required
+  429 stops routing in every conversation.
 - `ask` mode: the question is asked once, `/jev-route-auto` switches up at once,
   and `/jev-route-off` stops routing.
 - `ask()` in `JevService`: batching and answer validation, same as `score()`.

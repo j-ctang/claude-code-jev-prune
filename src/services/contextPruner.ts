@@ -18,6 +18,7 @@ import {
 } from "./pruneNotices.js";
 import {
   applyDecisions,
+  stubSaves,
   extractCandidates,
   loadsToolDefinitions,
 } from "./toolPairs.js";
@@ -126,7 +127,7 @@ export class ContextPruner {
         );
         return result.reason === "below-threshold"
           ? belowThreshold(result)
-          : this.withNothingToPrune(result, manual);
+          : this.withNothingToPrune(result, trigger);
       }
 
       // Saved decisions first, so the pruned prefix stays byte-identical.
@@ -197,11 +198,15 @@ export class ContextPruner {
       if (newRewrites) current = applyDecisions(request, dropped, rewrites);
 
       // Superseded results are never sent to Jev; trimmed ones are scored in
-      // their short form.
+      // their short form. A result smaller than its stub is never dropped.
       const eligible = live.filter(
         (candidate) =>
           !protectedIds.has(candidate.toolUseId) &&
-          !superseded.has(candidate.toolUseId),
+          !superseded.has(candidate.toolUseId) &&
+          stubSaves(
+            candidate.input,
+            rewrites.get(candidate.toolUseId) ?? candidate.result,
+          ),
       );
       const rewrittenTokens = estimateTokens(current);
       const session = sessionId ?? DEFAULT_SESSION;
@@ -236,7 +241,7 @@ export class ContextPruner {
           "no-candidates",
         );
         return eligible.length === 0
-          ? this.withNothingToPrune(result, manual)
+          ? this.withNothingToPrune(result, trigger)
           : result;
       }
 
@@ -374,15 +379,19 @@ export class ContextPruner {
           };
   }
 
+  /**
+   * Answers only a /jev-prune the user typed. A canary prune was not asked
+   * for, so finding nothing is not worth telling the user.
+   */
   private withNothingToPrune(
     result: PruneResult,
-    manual: boolean,
+    trigger: PruneTrigger | undefined,
   ): PruneResult {
-    if (!manual) return result;
+    if (trigger !== "manual") return result;
     const notice = nothingToPruneNotice(this.config);
     return {
       ...result,
-      manual,
+      manual: true,
       notice,
           };
   }

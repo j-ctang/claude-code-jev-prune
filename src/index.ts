@@ -5,6 +5,7 @@ import { loadConfig, type Config } from "./config.js";
 import { ContextPruner } from "./services/contextPruner.js";
 import { JevService } from "./services/jevService.js";
 import { ModelRouter, routeChoice } from "./services/modelRouter.js";
+import { NoticeMemory } from "./services/noticeMemory.js";
 import { createFileStateStore } from "./services/pruneState.js";
 import { JevRelevanceScorer } from "./services/relevanceScorer.js";
 import { shutdownServer } from "./serverLifecycle.js";
@@ -67,6 +68,10 @@ async function start(
     logger,
     startedAt: Date.now(),
     upstreamSignal: upstreamAbort.signal,
+    notices: new NoticeMemory({
+      path: `${config.statePath}.notices.json`,
+      logger,
+    }),
     ...(config.skillShadow
       ? {
           shadowObserver: new SkillShadowObserver(

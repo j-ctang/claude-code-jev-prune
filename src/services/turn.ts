@@ -39,7 +39,7 @@ function hasBlock(message: Message, type: string): boolean {
  * Claude Code may append `system` messages (hook context) after the user's
  * turn, so the turn boundary is judged from the last user/assistant message.
  */
-function lastTurnIndex(request: AnthropicRequest): number {
+export function lastTurnIndex(request: AnthropicRequest): number {
   for (let index = request.messages.length - 1; index >= 0; index -= 1) {
     const role = request.messages[index]?.role;
     if (role === "user" || role === "assistant") return index;
@@ -82,16 +82,24 @@ export function appendNotice(
   request: AnthropicRequest,
   notice: string,
 ): AnthropicRequest {
-  const index = lastTurnIndex(request);
-  const last = request.messages[index];
-  if (!last) return request;
+  return appendNoticeAt(request, lastTurnIndex(request), notice);
+}
+
+/** Adds a text block for Claude to the end of message `index`. */
+export function appendNoticeAt(
+  request: AnthropicRequest,
+  index: number,
+  notice: string,
+): AnthropicRequest {
+  const message = request.messages[index];
+  if (!message) return request;
   const content =
-    typeof last.content === "string"
-      ? [{ type: "text", text: last.content }]
-      : last.content;
+    typeof message.content === "string"
+      ? [{ type: "text", text: message.content }]
+      : message.content;
   const messages = [...request.messages];
   messages[index] = {
-    ...last,
+    ...message,
     content: [...content, { type: "text", text: notice }],
   };
   return { ...request, messages };

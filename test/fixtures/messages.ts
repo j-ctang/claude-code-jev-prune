@@ -1,3 +1,4 @@
+import { DROPPED_STUB } from "../../src/services/toolPairs.js";
 import type { AnthropicRequest, ContentBlock } from "../../src/types.js";
 
 export const twoToolRequest: AnthropicRequest = {
@@ -26,7 +27,7 @@ export const twoToolRequest: AnthropicRequest = {
         {
           type: "tool_result",
           tool_use_id: "call-old",
-          content: "stale output",
+          content: `stale output ${"from an earlier investigation ".repeat(12)}`,
           result_meta: "preserve-result-metadata",
         },
       ],
@@ -50,7 +51,7 @@ export const twoToolRequest: AnthropicRequest = {
         {
           type: "tool_result",
           tool_use_id: "call-new",
-          content: "current output",
+          content: `current output ${"from the JWT validation code ".repeat(12)}`,
         },
       ],
     },
@@ -58,12 +59,36 @@ export const twoToolRequest: AnthropicRequest = {
   ],
 };
 
-export function allToolUseIds(request: AnthropicRequest): string[] {
+/** Tool-use IDs whose pair jev-prune stubbed out as dropped. */
+export function droppedToolIds(request: AnthropicRequest): string[] {
   const ids: string[] = [];
   for (const message of request.messages) {
     if (!Array.isArray(message.content)) continue;
     for (const block of message.content) {
-      if (block.type === "tool_use" && typeof block.id === "string") {
+      if (
+        block.type === "tool_result" &&
+        typeof block.tool_use_id === "string" &&
+        block.content === DROPPED_STUB
+      ) {
+        ids.push(block.tool_use_id);
+      }
+    }
+  }
+  return ids;
+}
+
+/** Tool-use IDs still carrying their input, i.e. not dropped. */
+export function allToolUseIds(request: AnthropicRequest): string[] {
+  const dropped = new Set(droppedToolIds(request));
+  const ids: string[] = [];
+  for (const message of request.messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const block of message.content) {
+      if (
+        block.type === "tool_use" &&
+        typeof block.id === "string" &&
+        !dropped.has(block.id)
+      ) {
         ids.push(block.id);
       }
     }
@@ -71,14 +96,17 @@ export function allToolUseIds(request: AnthropicRequest): string[] {
   return ids;
 }
 
+/** Tool-result IDs still carrying their output, i.e. not dropped. */
 export function allToolResultIds(request: AnthropicRequest): string[] {
+  const dropped = new Set(droppedToolIds(request));
   const ids: string[] = [];
   for (const message of request.messages) {
     if (!Array.isArray(message.content)) continue;
     for (const block of message.content) {
       if (
         block.type === "tool_result" &&
-        typeof block.tool_use_id === "string"
+        typeof block.tool_use_id === "string" &&
+        !dropped.has(block.tool_use_id)
       ) {
         ids.push(block.tool_use_id);
       }

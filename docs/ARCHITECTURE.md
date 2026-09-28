@@ -19,7 +19,7 @@ Express application
        │    ├── extract safe candidates
        │    ├── apply protection policy
        │    ├── score candidates with Jev
-       │    ├── remove selected pairs
+       │    ├── stub selected pairs
        │    └── route model
        └── forward to ANTHROPIC_UPSTREAM_URL
                     │
@@ -39,13 +39,14 @@ Express application
 | `src/services/relevanceScorer.ts` | Ask Jev whether each tool call is still needed, in batches of 32. |
 | `src/services/contextPruner.ts` | Run the pruning pipeline: re-apply saved decisions, gate, rewrite, score, render. |
 | `src/services/decisionMemory.ts` | Remember drop, keep, and rewrite decisions; persist them across restarts. |
-| `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and remove or rewrite them immutably. |
+| `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and stub or rewrite them immutably. |
 | `src/services/toolRewrites.ts` | Stub superseded Reads and trim large outputs without calling Jev. |
 | `src/services/turn.ts` | Read the latest turn: new user turn, goal, slash command, last reply. |
 | `src/services/canary.ts` | Watch the main thread's response canary and handle `/jev-prune-auto` commands. |
 | `src/services/conversation.ts` | Tell the main thread from subagents by header and key each thread. |
 | `src/services/modelRouter.ts` | Decide per conversation whether to move a hard prompt to the hard model and back, and handle `/jev-route-*` commands. |
 | `src/services/savedChoice.ts` | Save a slash-command choice across restarts: canary auto-prune and the `ask` / `auto` / `off` routing choice. |
+| `src/services/noticeMemory.ts` | Add each notice back where Claude saw it, so preserved thinking keeps a byte-identical history. Saved beside the pruning state to survive a restart. |
 | `src/services/messagePreparer.ts` | Turn one `/v1/messages` request into what is sent: canary, prune and route, notices for Claude, the routed-model fallback, and the skill shadow reply hook. |
 | `src/middleware/proxy.ts` | Forward headers/body and stream upstream responses. |
 | `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
@@ -77,7 +78,7 @@ A tool call is eligible only when all of these statements are true:
 
 The blocks do not need to be in adjacent messages. Candidates are ordered by the assistant block's location. Duplicate, unmatched, and malformed blocks remain untouched.
 
-When a candidate is dropped, the exact tool-use block and matching result block are removed. Any array-content message made empty by that removal is also removed. Surrounding blocks, message properties, top-level request properties, and system content are preserved.
+When a candidate is dropped, its result becomes a stub saying it was pruned later, when the user sent a newer message, and that every reply before then saw the full output. Its tool-use input keeps short fields, such as a path or command, and long strings become `[jev-prune] Removed.` Stub wording was tested live on real Claude Code requests. Removing the pair, a bare "removed" stub, or "removed afterwards" all led Claude to say it had never seen the output and to retract correct answers, up to 12 of 12 samples. This wording did so in 0 of 36. A result smaller than its stub is never dropped. No block or message is removed, so the history keeps its shape. Removing an emptied message could leave a mid-conversation `system` message right after an assistant turn, which the API rejects with a 400. Surrounding blocks, message properties, top-level request properties, and system content are preserved.
 
 ## Protection and Scoring Policy
 
@@ -157,6 +158,8 @@ The second threshold is an aggressive policy switch, not a hard output-size guar
 A Jev error invalidates the entire prune attempt. The proxy never applies a partial set of scores from successful batches.
 
 ## Header and Credential Boundaries
+
+When jev-prune changed a request (a prune, a notice, or a routed model) and the request uses adaptive or enabled thinking, the proxy adds the `thinking-binding-controls-2026-08-01` beta and `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Preserved thinking is bound to the exact history before it, so an edit invalidates every thinking block after the edit. Without this, newer accounts get a 400; with it, the API drops only the mismatched thinking. Requests jev-prune left unchanged are sent as is. With thinking disabled, the API rejects `block_binding`, so it is never added. Sending thinking made by one model to another needs no beta.
 
 The proxy removes hop-by-hop request headers, stale body-length/encoding headers, `typesafe-api-key`, and `x-typesafe-api-key` before contacting Anthropic. It preserves Claude Code's Anthropic authentication and version headers.
 
