@@ -1,22 +1,17 @@
-## Problem and issue
 Closes #
+Risk: risk:low / risk:feature
 
-## Risk and scope
-Risk: feature / low-risk
-Changed behavior:
+## Summary
+- 
 
-## Acceptance criteria
-- [ ]
+## Before/After
+<!-- Command output, screenshot, or failing test before and passing after. -->
 
-## Evidence
-- Tested commit:
-- Before (repro/output or screenshot):
-- After (output or screenshot):
-- Full local check command and exit status:
-- Hosted CI run:
-- Offline/isolation evidence:
+## Commit History
+- 
 
-## Review and rollback
-- Other-model review (after green CI):
-- Human approval when required:
-- Revert command or settings restoration:
+## Sensitive Changes
+None.
+
+## Rollback
+`git revert <merge-sha>`
