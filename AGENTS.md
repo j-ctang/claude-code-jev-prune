@@ -31,8 +31,16 @@ for pruning/routing. Tests use injected responses and local HTTP servers.
   must be recorded in the issue/PR.
 - Keep one concern per PR, under approximately 300 changed lines.
 - PRs target `staging`. Run the full local check before opening a PR.
-- Attach the issue, acceptance criteria, tested SHA, before/after evidence,
-  command results, hosted CI URL, and rollback instructions.
+- Fill in the PR template. State what is ready, not everything that happened.
+
+## Writing on GitHub
+
+- Keep PR descriptions and comments short. End with a clear verdict, such as
+  "Ready for review. CI passes. No blocking findings."
+- Write "All tests pass." Do not list test counts.
+- Never link material others cannot open, such as local plans or `/tmp` paths.
+- Name work by what it does, not by internal labels like "Phase 1".
+- Write in the first person ("I"). Do not name which person or agent did what.
 - Green hosted CI comes before independent review by the other model.
   An agent must not review its own change; AI review is additional evidence.
 - Human tests staging before promotion. Main only moves by fast-forward

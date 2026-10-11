@@ -28,5 +28,4 @@ Set the session/checkpoint budget and when to report a blocker.
 List excluded changes. No unrelated features, weakened tests, or protected edits.
 
 ## REPORT
-Require issue/PR links, tested SHA, before/after evidence, check results,
-independent review, human approval, and rollback.
+Open a PR to `staging` using the PR template.
