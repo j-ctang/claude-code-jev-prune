@@ -1,0 +1,9 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit is advisory only. Its findings never gate a merge.
+reviews:
+  auto_review:
+    # PRs target staging, which is not the default branch.
+    base_branches: ["^staging$"]
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
