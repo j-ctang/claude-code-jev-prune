@@ -414,3 +414,61 @@ describe("JevService", () => {
     ).rejects.toThrow("TypeSafe returned an invalid answer for candidate_0");
   });
 });
+
+/** Usage stays scoped to a scoring call, including all its batches. */
+test.each([
+  [undefined],
+  [null],
+  ["bad"],
+  [[]],
+  [{}],
+  [{ input_tokens: "100", output_tokens: 1 }],
+  [{ input_tokens: -1, output_tokens: 1 }],
+  [{ input_tokens: 1.5, output_tokens: 1 }],
+  [{ input_tokens: 100, output_tokens: null }],
+])("ignores missing or malformed usage %p", async (usage) => {
+  const fetchFn: typeof fetch = async () =>
+    Response.json({
+      answers: { candidate_0: { type: "noul", noul: 0.91 } },
+      usage,
+    });
+  const totals = { inputTokens: 0, outputTokens: 0 };
+  const scorer = scorerFor(fetchFn) as JevRelevanceScorer & {
+    score(
+      goal: string,
+      candidates: readonly ToolCandidate[],
+      onUsage: (usage: typeof totals) => void,
+    ): Promise<ReadonlyMap<string, number>>;
+  };
+  const scores = await scorer.score("goal", [candidate("a")], (usage) => {
+    totals.inputTokens += usage.inputTokens;
+    totals.outputTokens += usage.outputTokens;
+  });
+  expect(scores.get("a")).toBe(0.91);
+  expect(totals).toEqual({ inputTokens: 0, outputTokens: 0 });
+});
+
+test("reports usage across two batches without leaking into the next score", async () => {
+  const scorer = scorerFor(async (_input, init) =>
+    responseForBatch(String(init?.body)),
+  ) as JevRelevanceScorer & {
+    score(
+      goal: string,
+      candidates: readonly ToolCandidate[],
+      onUsage: (usage: { inputTokens: number; outputTokens: number }) => void,
+    ): Promise<ReadonlyMap<string, number>>;
+  };
+  const totals = { inputTokens: 0, outputTokens: 0 };
+  await scorer.score(
+    "goal",
+    Array.from({ length: 33 }, (_, i) => candidate(String(i))),
+    (usage) => {
+      totals.inputTokens += usage.inputTokens;
+      totals.outputTokens += usage.outputTokens;
+    },
+  );
+  expect(totals).toEqual({ inputTokens: 200, outputTokens: 33 });
+  const next: unknown[] = [];
+  await scorer.score("goal", [candidate("next")], (usage) => next.push(usage));
+  expect(next).toEqual([{ inputTokens: 100, outputTokens: 1 }]);
+});

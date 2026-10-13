@@ -1340,3 +1340,33 @@ describe("ContextPruner", () => {
     expect(JSON.stringify(events)).not.toContain("stale output");
   });
 });
+
+test.each([false, true])(
+  "carries prune usage through success or fail-open (%s)",
+  async (fail) => {
+    const scorer = {
+      async score(
+        _goal: string,
+        candidates: readonly ToolCandidate[],
+        onUsage?: (usage: {
+          inputTokens: number;
+          outputTokens: number;
+        }) => void,
+      ) {
+        onUsage?.({ inputTokens: 200, outputTokens: 33 });
+        if (fail) throw new PruneError("later batch failed");
+        return new Map(
+          candidates.map((candidate) => [candidate.toolUseId, 0.1]),
+        );
+      },
+    };
+    const result = await new ContextPruner({ config: config(), scorer }).prune(
+      twoToolRequest,
+    );
+    expect(result.reason).toBe(fail ? "fail-open" : "pruned");
+    expect(result).toMatchObject({
+      typesafeInputTokens: 200,
+      typesafeOutputTokens: 33,
+    });
+  },
+);
