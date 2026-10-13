@@ -52,7 +52,8 @@ test("stats reads back exactly what the proxy recorded", () => {
     {
       ...base,
       removedTokens: 30_000,
-      ...{ typesafeInputTokens: 120, typesafeOutputTokens: 7 },
+      typesafeInputTokens: 120,
+      typesafeOutputTokens: 7,
     },
     context,
   );
