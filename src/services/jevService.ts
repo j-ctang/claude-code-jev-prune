@@ -1,5 +1,6 @@
 import { PruneError } from "../errors.js";
 import type { NoulAsker, NoulQuestion, UsageReporter } from "../types.js";
+import { validTokenCount } from "../utils/tokenCounter.js";
 
 /** TypeSafe answers at most this many questions per request. */
 export const MAX_QUESTIONS_PER_REQUEST = 32;
@@ -127,9 +128,4 @@ export class JevService implements NoulAsker {
     if (!("noul" in value) || typeof value.noul !== "number") return false;
     return Number.isFinite(value.noul) && value.noul >= 0 && value.noul <= 1;
   }
-}
-
-/** Token counts must be finite, nonnegative integers. */
-export function validTokenCount(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }

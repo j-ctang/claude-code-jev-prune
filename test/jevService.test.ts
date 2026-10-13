@@ -116,6 +116,59 @@ describe("JevService", () => {
     ).rejects.toThrow("TypeSafe returned an invalid answer for hard");
   });
 
+  test("ask reports the usage TypeSafe returns", async () => {
+    const question = {
+      instructions: "Is it hard?",
+      criteria: { true: "Hard.", false: "Easy." },
+    };
+    const fetchFn: typeof fetch = async () =>
+      Response.json({
+        answers: { hard: { type: "noul", noul: 0.4 } },
+        usage: { input_tokens: 120, output_tokens: 7 },
+      });
+    const reported: unknown[] = [];
+
+    const answers = await createService(fetchFn).ask(
+      {},
+      { hard: question },
+      (usage) => reported.push(usage),
+    );
+
+    expect(answers).toEqual(new Map([["hard", 0.4]]));
+    expect(reported).toEqual([{ inputTokens: 120, outputTokens: 7 }]);
+  });
+
+  test("ask reports zero usage for a missing or malformed usage field", async () => {
+    const question = {
+      instructions: "Is it hard?",
+      criteria: { true: "Hard.", false: "Easy." },
+    };
+    const usages = [
+      undefined,
+      null,
+      [120, 7],
+      { input_tokens: 120 },
+      { input_tokens: -1, output_tokens: 7 },
+      { input_tokens: 120, output_tokens: 1.5 },
+      { input_tokens: "120", output_tokens: 7 },
+    ];
+
+    for (const usage of usages) {
+      const fetchFn: typeof fetch = async () =>
+        Response.json({ answers: { hard: { type: "noul", noul: 0.4 } }, usage });
+      const reported: unknown[] = [];
+
+      const answers = await createService(fetchFn).ask(
+        {},
+        { hard: question },
+        (reportedUsage) => reported.push(reportedUsage),
+      );
+
+      expect(answers).toEqual(new Map([["hard", 0.4]]));
+      expect(reported).toEqual([{ inputTokens: 0, outputTokens: 0 }]);
+    }
+  });
+
   test("sends named noul questions and returns scores by tool-use ID", async () => {
     const captured: CapturedRequest[] = [];
     const fetchFn: typeof fetch = async (input, init) => {
