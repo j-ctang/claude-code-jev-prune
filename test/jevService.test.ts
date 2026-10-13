@@ -277,6 +277,23 @@ describe("JevService", () => {
     expect(String(sent?.result)).toMatch(/\[truncated \d+ characters\]$/);
   });
 
+  test("truncates an oversized goal so the request stays under the limit", async () => {
+    const requestTokens: number[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      requestTokens.push(estimateTokens(JSON.parse(body)));
+      return responseForBatch(body);
+    };
+
+    const scores = await scorerFor(fetchFn).score("g".repeat(400_000), [
+      candidate("call-a"),
+    ]);
+
+    expect(scores.get("call-a")).toBe(0.91);
+    expect(requestTokens).toHaveLength(1);
+    expect(requestTokens[0]).toBeLessThan(64_000);
+  });
+
   test("leaves small candidates unchanged", async () => {
     const bodies: unknown[] = [];
     const fetchFn: typeof fetch = async (_input, init) => {

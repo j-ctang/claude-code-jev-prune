@@ -19,6 +19,9 @@ const BATCH_TOKEN_BUDGET = Math.floor(MAX_REQUEST_TOKENS * 0.75);
 /** Room for the model name and the JSON around the candidates. */
 const REQUEST_OVERHEAD_TOKENS = 256;
 
+/** A goal is cut to about a quarter of the budget, leaving room for candidates. */
+const MAX_GOAL_CHARS = BATCH_TOKEN_BUDGET;
+
 /** A candidate as sent to TypeSafe, with its estimated share of a request. */
 interface Sendable {
   candidate: ToolCandidate;
@@ -126,9 +129,10 @@ export class JevRelevanceScorer implements RelevanceScorer {
     goal: string,
     candidates: readonly ToolCandidate[],
   ): Promise<ReadonlyMap<string, number>> {
+    const sentGoal = String(truncated(goal, MAX_GOAL_CHARS));
     const scores = new Map<string, number>();
-    for (const batch of batches(goal, candidates)) {
-      for (const [toolUseId, score] of await this.scoreBatch(goal, batch)) {
+    for (const batch of batches(sentGoal, candidates)) {
+      for (const [toolUseId, score] of await this.scoreBatch(sentGoal, batch)) {
         scores.set(toolUseId, score);
       }
     }
