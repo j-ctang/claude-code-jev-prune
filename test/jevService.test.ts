@@ -294,6 +294,39 @@ describe("JevService", () => {
     expect(requestTokens[0]).toBeLessThan(64_000);
   });
 
+  test("keeps a long goal whole when the request already fits", async () => {
+    const goals: unknown[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      goals.push(
+        (JSON.parse(body) as { state: { current_goal: unknown } }).state
+          .current_goal,
+      );
+      return responseForBatch(body);
+    };
+    const goal = "g".repeat(80_000);
+
+    await scorerFor(fetchFn).score(goal, [candidate("call-a")]);
+
+    expect(goals).toEqual([goal]);
+  });
+
+  test("keeps a goal of escaped characters under the limit", async () => {
+    const requestTokens: number[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      requestTokens.push(estimateTokens(JSON.parse(body)));
+      return responseForBatch(body);
+    };
+
+    await scorerFor(fetchFn).score("\u0001".repeat(200_000), [
+      candidate("call-a"),
+    ]);
+
+    expect(requestTokens).toHaveLength(1);
+    expect(requestTokens[0]).toBeLessThan(64_000);
+  });
+
   test("leaves small candidates unchanged", async () => {
     const bodies: unknown[] = [];
     const fetchFn: typeof fetch = async (_input, init) => {

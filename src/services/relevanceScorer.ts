@@ -19,8 +19,8 @@ const BATCH_TOKEN_BUDGET = Math.floor(MAX_REQUEST_TOKENS * 0.75);
 /** Room for the model name and the JSON around the candidates. */
 const REQUEST_OVERHEAD_TOKENS = 256;
 
-/** A goal is cut to about a quarter of the budget, leaving room for candidates. */
-const MAX_GOAL_CHARS = BATCH_TOKEN_BUDGET;
+/** A goal too long to send whole is cut to this, leaving room for candidates. */
+const MAX_GOAL_TOKENS = Math.floor(BATCH_TOKEN_BUDGET / 4);
 
 /** A candidate as sent to TypeSafe, with its estimated share of a request. */
 interface Sendable {
@@ -94,6 +94,34 @@ function sendable(candidate: ToolCandidate, maxTokens: number): Sendable {
   return { candidate, input, result, tokens };
 }
 
+/** The goal to send: whole if one request fits, else cut to `MAX_GOAL_TOKENS`. */
+function sendableGoal(
+  goal: string,
+  candidates: readonly ToolCandidate[],
+): string {
+  const wholeRequest =
+    REQUEST_OVERHEAD_TOKENS +
+    estimateTokens(goal) +
+    candidates.reduce(
+      (sum, candidate) =>
+        sum + entryTokens(candidate, candidate.input, candidate.result),
+      0,
+    );
+  if (
+    candidates.length <= MAX_QUESTIONS_PER_REQUEST &&
+    wholeRequest <= BATCH_TOKEN_BUDGET
+  ) {
+    return goal;
+  }
+  let chars = MAX_GOAL_TOKENS * 4;
+  let sent = String(truncated(goal, chars));
+  while (estimateTokens(sent) > MAX_GOAL_TOKENS && chars > 0) {
+    chars = Math.floor(chars * 0.9);
+    sent = String(truncated(goal, chars));
+  }
+  return sent;
+}
+
 /** Splits candidates by question count and by estimated request size. */
 function batches(
   goal: string,
@@ -129,7 +157,7 @@ export class JevRelevanceScorer implements RelevanceScorer {
     goal: string,
     candidates: readonly ToolCandidate[],
   ): Promise<ReadonlyMap<string, number>> {
-    const sentGoal = String(truncated(goal, MAX_GOAL_CHARS));
+    const sentGoal = sendableGoal(goal, candidates);
     const scores = new Map<string, number>();
     for (const batch of batches(sentGoal, candidates)) {
       for (const [toolUseId, score] of await this.scoreBatch(sentGoal, batch)) {
