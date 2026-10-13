@@ -1,6 +1,6 @@
-import { validTokenCount } from "./jevService.js";
 import type { PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
+import { validTokenCount } from "../utils/tokenCounter.js";
 
 /**
  * The prune events `jev-prune --stats` reads back from the log. They are
