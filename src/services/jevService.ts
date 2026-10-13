@@ -1,5 +1,5 @@
 import { PruneError } from "../errors.js";
-import type { NoulAsker, NoulQuestion } from "../types.js";
+import type { NoulAsker, NoulQuestion, UsageReporter } from "../types.js";
 
 /** TypeSafe answers at most this many questions per request. */
 export const MAX_QUESTIONS_PER_REQUEST = 32;
@@ -40,6 +40,7 @@ export class JevService implements NoulAsker {
   async ask(
     state: Record<string, unknown>,
     questions: Readonly<Record<string, NoulQuestion>>,
+    onUsage?: UsageReporter,
   ): Promise<ReadonlyMap<string, number>> {
     const keys = Object.keys(questions);
     if (keys.length > MAX_QUESTIONS_PER_REQUEST) {
@@ -72,6 +73,28 @@ export class JevService implements NoulAsker {
     }
 
     const payload: unknown = await response.json();
+    if (onUsage) {
+      const usage =
+        typeof payload === "object" && payload !== null && "usage" in payload
+          ? payload.usage
+          : undefined;
+      const valid =
+        typeof usage === "object" &&
+        usage !== null &&
+        !Array.isArray(usage) &&
+        "input_tokens" in usage &&
+        "output_tokens" in usage &&
+        validTokenCount(usage.input_tokens) &&
+        validTokenCount(usage.output_tokens);
+      onUsage(
+        valid
+          ? {
+              inputTokens: usage.input_tokens as number,
+              outputTokens: usage.output_tokens as number,
+            }
+          : { inputTokens: 0, outputTokens: 0 },
+      );
+    }
     const answers = this.readAnswers(payload);
     const scores = new Map<string, number>();
     for (const key of keys) {
@@ -104,4 +127,9 @@ export class JevService implements NoulAsker {
     if (!("noul" in value) || typeof value.noul !== "number") return false;
     return Number.isFinite(value.noul) && value.noul >= 0 && value.noul <= 1;
   }
+}
+
+/** Token counts must be finite, nonnegative integers. */
+export function validTokenCount(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }

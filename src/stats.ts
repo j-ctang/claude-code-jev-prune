@@ -22,6 +22,9 @@ async function main(): Promise<void> {
       ? "No prunes yet."
       : `${summary.prunes} prune${summary.prunes === 1 ? "" : "s"} since ${summary.since ?? "the log started"}, about ${formatTokens(summary.tokensRemoved)} tokens of stale context removed.`,
   ];
+  lines.push(
+    `TypeSafe usage: ${formatTokens(summary.typesafeInputTokens)} input tokens, ${formatTokens(summary.typesafeOutputTokens)} output tokens.`,
+  );
   if (summary.failOpens > 0)
     lines.push(
       `${summary.failOpens} request${summary.failOpens === 1 ? "" : "s"} went through unpruned because TypeSafe did not answer.`,

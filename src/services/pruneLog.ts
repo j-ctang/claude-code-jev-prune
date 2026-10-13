@@ -1,3 +1,4 @@
+import { validTokenCount } from "./jevService.js";
 import type { PruneResult, ProxyStats } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 
@@ -9,6 +10,8 @@ const PRUNE_COMPLETE = "prune_complete";
 const PRUNE_FAIL_OPEN = "prune_fail_open";
 
 interface PruneCompleteEvent {
+  typesafeInputTokens: number;
+  typesafeOutputTokens: number;
   beforeTokens: number;
   afterTokens: number;
   evaluated: number;
@@ -39,6 +42,8 @@ export function recordPruneOutcome(
     logger.warn(PRUNE_FAIL_OPEN, {
       error: result.failureReason ?? "unknown pruning error",
       durationMs,
+      typesafeInputTokens: result.typesafeInputTokens ?? 0,
+      typesafeOutputTokens: result.typesafeOutputTokens ?? 0,
     });
   } else if (result.resumed) {
     logger.info("resume_notice", { tokens: result.afterTokens });
@@ -47,6 +52,8 @@ export function recordPruneOutcome(
     stats.prunes += 1;
     stats.tokensRemoved += removedTokens;
     const event: PruneCompleteEvent = {
+      typesafeInputTokens: result.typesafeInputTokens ?? 0,
+      typesafeOutputTokens: result.typesafeOutputTokens ?? 0,
       beforeTokens: result.beforeTokens,
       afterTokens: result.afterTokens,
       evaluated: result.evaluated,
@@ -68,6 +75,8 @@ export function recordPruneOutcome(
 }
 
 export interface LogSummary {
+  typesafeInputTokens: number;
+  typesafeOutputTokens: number;
   prunes: number;
   tokensRemoved: number;
   failOpens: number;
@@ -76,7 +85,13 @@ export interface LogSummary {
 
 /** Totals the prune events recorded above from the log's JSON lines. */
 export function summarizeLog(raw: string): LogSummary {
-  const summary: LogSummary = { prunes: 0, tokensRemoved: 0, failOpens: 0 };
+  const summary: LogSummary = {
+    prunes: 0,
+    tokensRemoved: 0,
+    failOpens: 0,
+    typesafeInputTokens: 0,
+    typesafeOutputTokens: 0,
+  };
   for (const line of raw.split("\n")) {
     let entry: { message?: unknown; timestamp?: unknown } & Partial<
       Record<keyof PruneCompleteEvent, unknown>
@@ -85,6 +100,12 @@ export function summarizeLog(raw: string): LogSummary {
       entry = JSON.parse(line) as typeof entry;
     } catch {
       continue;
+    }
+    if (entry.message === PRUNE_COMPLETE || entry.message === PRUNE_FAIL_OPEN) {
+      if (validTokenCount(entry.typesafeInputTokens))
+        summary.typesafeInputTokens += entry.typesafeInputTokens;
+      if (validTokenCount(entry.typesafeOutputTokens))
+        summary.typesafeOutputTokens += entry.typesafeOutputTokens;
     }
     if (entry.message === PRUNE_COMPLETE) {
       summary.prunes += 1;

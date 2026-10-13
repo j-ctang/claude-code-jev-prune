@@ -3,6 +3,7 @@ import type {
   NoulQuestion,
   RelevanceScorer,
   ToolCandidate,
+  UsageReporter,
 } from "../types.js";
 import { estimateTokens } from "../utils/tokenCounter.js";
 import { MAX_QUESTIONS_PER_REQUEST, MAX_REQUEST_TOKENS } from "./jevService.js";
@@ -155,11 +156,16 @@ export class JevRelevanceScorer implements RelevanceScorer {
   async score(
     goal: string,
     candidates: readonly ToolCandidate[],
+    onUsage?: UsageReporter,
   ): Promise<ReadonlyMap<string, number>> {
     const sentGoal = sendableGoal(goal, candidates);
     const scores = new Map<string, number>();
     for (const batch of batches(sentGoal, candidates)) {
-      for (const [toolUseId, score] of await this.scoreBatch(sentGoal, batch)) {
+      for (const [toolUseId, score] of await this.scoreBatch(
+        sentGoal,
+        batch,
+        onUsage,
+      )) {
         scores.set(toolUseId, score);
       }
     }
@@ -169,6 +175,7 @@ export class JevRelevanceScorer implements RelevanceScorer {
   private async scoreBatch(
     goal: string,
     batch: readonly Sendable[],
+    onUsage?: UsageReporter,
   ): Promise<ReadonlyMap<string, number>> {
     const answers = await this.asker.ask(
       {
@@ -184,6 +191,7 @@ export class JevRelevanceScorer implements RelevanceScorer {
       Object.fromEntries(
         batch.map((_item, index) => [`candidate_${index}`, question(index)]),
       ),
+      onUsage,
     );
     const scores = new Map<string, number>();
     for (const [index, { candidate }] of batch.entries()) {

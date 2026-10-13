@@ -54,10 +54,18 @@ export interface ToolCandidate {
   result: unknown;
 }
 
+export interface TypeSafeUsage {
+  inputTokens: number;
+  outputTokens: number;
+}
+
+export type UsageReporter = (usage: TypeSafeUsage) => void;
+
 export interface RelevanceScorer {
   score(
     goal: string,
     candidates: readonly ToolCandidate[],
+    onUsage?: UsageReporter,
   ): Promise<ReadonlyMap<string, number>>;
 }
 
@@ -71,6 +79,7 @@ export interface NoulAsker {
   ask(
     state: Record<string, unknown>,
     questions: Readonly<Record<string, NoulQuestion>>,
+    onUsage?: UsageReporter,
   ): Promise<ReadonlyMap<string, number>>;
 }
 
@@ -89,6 +98,8 @@ export interface PruneResult {
     | "pruned"
     | "fail-open";
   failureReason?: string;
+  typesafeInputTokens?: number;
+  typesafeOutputTokens?: number;
   manual?: boolean;
   superseded?: number;
   trimmed?: number;
