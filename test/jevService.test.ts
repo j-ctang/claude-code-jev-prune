@@ -1,6 +1,7 @@
 import { JevService } from "../src/services/jevService.js";
 import { JevRelevanceScorer } from "../src/services/relevanceScorer.js";
 import type { ToolCandidate } from "../src/types.js";
+import { estimateTokens } from "../src/utils/tokenCounter.js";
 
 function candidate(toolUseId: string): ToolCandidate {
   return {
@@ -207,6 +208,97 @@ describe("JevService", () => {
     expect(batchSizes).toEqual([32, 1]);
     expect(scores.size).toBe(33);
     expect(scores.get("call-32")).toBe(0.91);
+  });
+
+  test("keeps each request under the TypeSafe input token limit", async () => {
+    const requestTokens: number[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      requestTokens.push(estimateTokens(JSON.parse(body)));
+      return responseForBatch(body);
+    };
+    // 32 file reads of about 4K tokens each: a normal context past 120K.
+    const candidates = Array.from({ length: 32 }, (_, index) => ({
+      ...candidate(`call-${index}`),
+      result: "x".repeat(16_000),
+    }));
+
+    const scores = await scorerFor(fetchFn).score("goal", candidates);
+
+    expect(scores.size).toBe(32);
+    for (const tokens of requestTokens) expect(tokens).toBeLessThan(64_000);
+  });
+
+  test("truncates a candidate too large for one request and still scores it", async () => {
+    const sent: { tokens: number; result: unknown; input: unknown }[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      const request = JSON.parse(body) as {
+        state: { candidates: { input: unknown; result: unknown }[] };
+      };
+      sent.push({
+        tokens: estimateTokens(request),
+        result: request.state.candidates[0]?.result,
+        input: request.state.candidates[0]?.input,
+      });
+      return responseForBatch(body);
+    };
+    const huge = {
+      ...candidate("call-huge"),
+      input: { content: "i".repeat(400_000) },
+      result: [{ type: "text", text: "r".repeat(400_000) }],
+    };
+
+    const scores = await scorerFor(fetchFn).score("goal", [huge]);
+
+    expect(scores.get("call-huge")).toBe(0.91);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]?.tokens).toBeLessThan(64_000);
+    expect(String(sent[0]?.result)).toMatch(/\[truncated \d+ characters\]$/);
+    expect(String(sent[0]?.input)).toMatch(/\[truncated \d+ characters\]$/);
+  });
+
+  test("keeps a small input whole when only the result is too large", async () => {
+    let sent: { input: unknown; result: unknown } | undefined;
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      const request = JSON.parse(body) as {
+        state: { candidates: { input: unknown; result: unknown }[] };
+      };
+      sent = request.state.candidates[0];
+      return responseForBatch(body);
+    };
+    const bigRead = { ...candidate("call-big"), result: "r".repeat(400_000) };
+
+    await scorerFor(fetchFn).score("goal", [bigRead]);
+
+    expect(sent?.input).toEqual({ path: "/tmp/call-big.ts" });
+    expect(String(sent?.result).length).toBeGreaterThan(100_000);
+    expect(String(sent?.result)).toMatch(/\[truncated \d+ characters\]$/);
+  });
+
+  test("leaves small candidates unchanged", async () => {
+    const bodies: unknown[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      bodies.push(JSON.parse(body));
+      return responseForBatch(body);
+    };
+
+    await scorerFor(fetchFn).score("goal", [candidate("call-a")]);
+
+    expect(bodies).toMatchObject([
+      {
+        state: {
+          candidates: [
+            {
+              input: { path: "/tmp/call-a.ts" },
+              result: "contents for call-a",
+            },
+          ],
+        },
+      },
+    ]);
   });
 
   test.each([401, 429, 500])(

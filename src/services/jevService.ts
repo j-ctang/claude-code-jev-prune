@@ -4,6 +4,9 @@ import type { NoulAsker, NoulQuestion } from "../types.js";
 /** TypeSafe answers at most this many questions per request. */
 export const MAX_QUESTIONS_PER_REQUEST = 32;
 
+/** TypeSafe rejects a request above this many input tokens. */
+export const MAX_REQUEST_TOKENS = 64_000;
+
 interface JevServiceOptions {
   apiKey: string;
   baseUrl: string;
