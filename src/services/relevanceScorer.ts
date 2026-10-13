@@ -94,22 +94,21 @@ function sendable(candidate: ToolCandidate, maxTokens: number): Sendable {
   return { candidate, input, result, tokens };
 }
 
-/** The goal to send: whole if one request fits, else cut to `MAX_GOAL_TOKENS`. */
+/**
+ * The goal to send: whole if every candidate fits beside it untruncated, so
+ * each batch stays under budget. Otherwise cut to `MAX_GOAL_TOKENS`.
+ */
 function sendableGoal(
   goal: string,
   candidates: readonly ToolCandidate[],
 ): string {
-  const wholeRequest =
-    REQUEST_OVERHEAD_TOKENS +
-    estimateTokens(goal) +
-    candidates.reduce(
-      (sum, candidate) =>
-        sum + entryTokens(candidate, candidate.input, candidate.result),
-      0,
-    );
+  const room =
+    BATCH_TOKEN_BUDGET - REQUEST_OVERHEAD_TOKENS - estimateTokens(goal);
   if (
-    candidates.length <= MAX_QUESTIONS_PER_REQUEST &&
-    wholeRequest <= BATCH_TOKEN_BUDGET
+    candidates.every(
+      (candidate) =>
+        entryTokens(candidate, candidate.input, candidate.result) <= room,
+    )
   ) {
     return goal;
   }

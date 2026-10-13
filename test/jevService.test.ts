@@ -311,6 +311,26 @@ describe("JevService", () => {
     expect(goals).toEqual([goal]);
   });
 
+  test("keeps a long goal whole when every batch fits", async () => {
+    const goals: unknown[] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      goals.push(
+        (JSON.parse(body) as { state: { current_goal: unknown } }).state
+          .current_goal,
+      );
+      return responseForBatch(body);
+    };
+    const goal = "g".repeat(80_000);
+    const candidates = Array.from({ length: 33 }, (_, index) =>
+      candidate(`call-${index}`),
+    );
+
+    await scorerFor(fetchFn).score(goal, candidates);
+
+    expect(goals).toEqual([goal, goal]);
+  });
+
   test("keeps a goal of escaped characters under the limit", async () => {
     const requestTokens: number[] = [];
     const fetchFn: typeof fetch = async (_input, init) => {
