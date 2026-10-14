@@ -34,7 +34,7 @@ async function start(
   });
   const pruner = new ContextPruner({
     config,
-    scorer: new JevRelevanceScorer(jev),
+    scorer: new JevRelevanceScorer(jev, config.maxBatches),
     logger,
     stateStore: createFileStateStore(config.statePath),
   });

@@ -151,7 +151,10 @@ function batches(
 
 /** Asks Jev whether each tool call is still needed for the current goal. */
 export class JevRelevanceScorer implements RelevanceScorer {
-  constructor(private readonly asker: NoulAsker) {}
+  constructor(
+    private readonly asker: NoulAsker,
+    private readonly maxBatches = 8,
+  ) {}
 
   async score(
     goal: string,
@@ -160,7 +163,12 @@ export class JevRelevanceScorer implements RelevanceScorer {
   ): Promise<ReadonlyMap<string, number>> {
     const sentGoal = sendableGoal(goal, candidates);
     const scores = new Map<string, number>();
-    for (const batch of batches(sentGoal, candidates)) {
+    for (const [index, batch] of batches(sentGoal, candidates).entries()) {
+      if (this.maxBatches > 0 && index >= this.maxBatches) {
+        // Candidates beyond the call budget stay in context.
+        for (const { candidate } of batch) scores.set(candidate.toolUseId, 1);
+        continue;
+      }
       for (const [toolUseId, score] of await this.scoreBatch(
         sentGoal,
         batch,

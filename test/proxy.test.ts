@@ -123,6 +123,7 @@ function testConfig(
     jevBaseUrl: "https://api.typesafe.ai",
     jevModel: "jev-latest",
     jevTimeoutMs: 2_000,
+    maxBatches: 8,
     routeDefaultModel: "claude-opus-5-5",
     routeHardModel: "claude-fable-5-1",
     routeUpThreshold: 0.7,

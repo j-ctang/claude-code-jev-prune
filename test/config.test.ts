@@ -1,6 +1,16 @@
 import { loadConfig, withoutCredentials } from "../src/config.js";
 
 describe("loadConfig", () => {
+  test.each([[undefined, 8], ["2", 2]])(
+    "loads relevance batch cap %s as %s",
+    (value, expected) => {
+      expect(loadConfig({
+        TYPESAFE_API_KEY: "secret",
+        JEV_PRUNE_MAX_BATCHES: value,
+      })).toMatchObject({ maxBatches: expected });
+    },
+  );
+
   test("loads model routing defaults and overrides", () => {
     expect(loadConfig({ TYPESAFE_API_KEY: "secret" })).toMatchObject({
       routeDefaultModel: "claude-opus-5-5",

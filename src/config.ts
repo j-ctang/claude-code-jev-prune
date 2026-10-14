@@ -48,6 +48,7 @@ export interface Config {
   canaryPrefix?: string;
   canaryAction?: "notice" | "prune";
   keepRecent: number;
+  maxBatches: number;
   excludeTools: ReadonlySet<string>;
   debug: boolean;
   jevApiKey?: string;
@@ -224,6 +225,7 @@ export function loadConfig(env: NodeJS.ProcessEnv): Config {
     skillShadow,
     canaryPrefix: env.JEV_CANARY_PREFIX?.trim() ?? "",
     canaryAction,
+    maxBatches: Number(env.JEV_PRUNE_MAX_BATCHES) || 8,
     keepRecent: parseInteger(
       env.JEV_PRUNE_KEEP_RECENT ?? "5",
       "JEV_PRUNE_KEEP_RECENT",

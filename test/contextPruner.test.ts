@@ -1,5 +1,6 @@
 import type { Config } from "../src/config.js";
 import { PruneError } from "../src/errors.js";
+import { JevRelevanceScorer } from "../src/services/relevanceScorer.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
 import type {
   PruneStateSnapshot,
@@ -44,6 +45,7 @@ function config(overrides: Partial<Config> = {}): Config {
     jevBaseUrl: "https://api.typesafe.ai",
     jevModel: "jev-latest",
     jevTimeoutMs: 2_000,
+    maxBatches: 8,
     routeDefaultModel: "claude-opus-5-5",
     routeHardModel: "claude-fable-5-1",
     routeUpThreshold: 0.7,
@@ -1370,3 +1372,26 @@ test.each([false, true])(
     });
   },
 );
+
+test("keeps tool pairs beyond the relevance batch cap", async () => {
+  const request = structuredClone(twoToolRequest);
+  for (const index of [2, 5]) {
+    const blocks = request.messages[index]!.content as Array<Record<string, unknown>>;
+    blocks[0]!.content = "x".repeat(120_000);
+  }
+  let calls = 0;
+  const scorer = new JevRelevanceScorer({
+    async ask() {
+      calls++;
+      return new Map([["candidate_0", 0.01]]);
+    },
+  }, 1);
+  const pruner = new ContextPruner({ config: config(), scorer });
+
+  const result = await pruner.prune(request);
+
+  expect(calls).toBe(1);
+  expect(droppedToolIds(result.request)).toEqual(["call-old"]);
+  expect(allToolUseIds(result.request)).toEqual(["call-new"]);
+  expect(allToolResultIds(result.request)).toEqual(["call-new"]);
+});

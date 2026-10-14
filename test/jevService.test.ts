@@ -525,3 +525,32 @@ test("reports usage across two batches without leaking into the next score", asy
   await scorer.score("goal", [candidate("next")], (usage) => next.push(usage));
   expect(next).toEqual([{ inputTokens: 100, outputTokens: 1 }]);
 });
+
+test.each([[undefined, 8], [2, 2], [0, 9]])(
+  "caps relevance batches at %s and keeps unscored candidates",
+  async (maxBatches, expectedCalls) => {
+    const batchIds: string[][] = [];
+    const fetchFn: typeof fetch = async (_input, init) => {
+      const body = String(init?.body);
+      const request = JSON.parse(body) as {
+        state: { candidates: Array<{ tool_use_id: string }> };
+      };
+      batchIds.push(request.state.candidates.map((item) => item.tool_use_id));
+      return responseForBatch(body);
+    };
+    const scorer = new JevRelevanceScorer(createService(fetchFn), maxBatches);
+    const candidates = Array.from({ length: 257 }, (_, i) => candidate(`call-${i}`));
+    const scores = await scorer.score("goal", candidates);
+    expect(batchIds).toHaveLength(expectedCalls);
+    expect(batchIds[0]).toEqual(candidates.slice(0, 32).map((item) => item.toolUseId));
+    expect(scores.size).toBe(257);
+    expect(scores.get("call-1")).toBe(0.08);
+    expect(scores.get("call-256")).toBe(maxBatches === 0 ? 0.91 : 1);
+    if (maxBatches === 2) {
+      expect(scores.get("call-63")).toBe(0.08);
+      expect(scores.get("call-64")).toBe(1);
+    }
+    await scorer.score("next prune", candidates);
+    expect(batchIds).toHaveLength(expectedCalls * 2);
+  },
+);
