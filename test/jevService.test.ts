@@ -1,3 +1,4 @@
+import { PruneError } from "../src/errors.js";
 import { JevService } from "../src/services/jevService.js";
 import { JevRelevanceScorer } from "../src/services/relevanceScorer.js";
 import type { ToolCandidate } from "../src/types.js";
@@ -114,6 +115,49 @@ describe("JevService", () => {
     await expect(
       createService(missing).ask({}, { hard: question }),
     ).rejects.toThrow("TypeSafe returned an invalid answer for hard");
+  });
+
+  test("ask reports only the TypeSafe error type", async () => {
+    const fetchFn: typeof fetch = async () =>
+      Response.json({
+        error: {
+          type: "overloaded_error",
+          message: "sensitive upstream error details",
+        },
+        detail: "other sensitive response content",
+      });
+    const result = createService(fetchFn).ask(
+      {},
+      {
+        candidate_0: {
+          instructions: "Is it relevant?",
+          criteria: { true: "Relevant.", false: "Irrelevant." },
+        },
+      },
+    );
+
+    await expect(result).rejects.toBeInstanceOf(PruneError);
+    await expect(result).rejects.not.toThrow("sensitive");
+  });
+
+  test("ask rejects a payload with neither answers nor error", async () => {
+    const fetchFn: typeof fetch = async () =>
+      Response.json({ detail: "sensitive upstream content" });
+    const result = createService(fetchFn).ask(
+      {},
+      {
+        candidate_0: {
+          instructions: "Is it relevant?",
+          criteria: { true: "Relevant.", false: "Irrelevant." },
+        },
+      },
+    );
+
+    await expect(result).rejects.toBeInstanceOf(PruneError);
+    await expect(result).rejects.toHaveProperty(
+      "message",
+      "TypeSafe returned an invalid answer for candidate_0",
+    );
   });
 
   test("ask reports the usage TypeSafe returns", async () => {

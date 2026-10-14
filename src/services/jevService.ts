@@ -110,6 +110,14 @@ export class JevService implements NoulAsker {
 
   private readAnswers(payload: unknown): Record<string, unknown> {
     if (
+      typeof payload === "object" &&
+      payload !== null &&
+      "error" in payload &&
+      typeof payload.error === "string"
+    ) {
+      throw new PruneError(`TypeSafe error: ${payload.error}`);
+    }
+    if (
       typeof payload !== "object" ||
       payload === null ||
       !("answers" in payload) ||

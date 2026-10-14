@@ -1,6 +1,8 @@
 import type { Config } from "../src/config.js";
 import { PruneError } from "../src/errors.js";
 import { ContextPruner } from "../src/services/contextPruner.js";
+import { JevService } from "../src/services/jevService.js";
+import { JevRelevanceScorer } from "../src/services/relevanceScorer.js";
 import type {
   PruneStateSnapshot,
   PruneStateStore,
@@ -226,6 +228,30 @@ describe("ContextPruner", () => {
     expect(result.reason).toBe("fail-open");
     expect(result.beforeTokens).toBe(result.afterTokens);
     expect(result.failureReason).toBe("timeout");
+  });
+
+  test("fails open with only the TypeSafe error type", async () => {
+    const service = new JevService({
+      apiKey: "dummy-key",
+      baseUrl: "https://api.typesafe.ai",
+      model: "jev-latest",
+      timeoutMs: 2_000,
+      fetchFn: async () =>
+        Response.json({
+          error: { type: "overloaded_error", message: "sensitive details" },
+        }),
+    });
+    const pruner = new ContextPruner({
+      config: config(),
+      scorer: new JevRelevanceScorer(service),
+    });
+
+    const result = await pruner.prune(twoToolRequest);
+
+    expect(result.request).toBe(twoToolRequest);
+    expect(result.reason).toBe("fail-open");
+    expect(result.beforeTokens).toBe(result.afterTokens);
+    expect(result.failureReason).not.toContain("sensitive");
   });
 
   test("logs only the error name for errors from other code", async () => {
