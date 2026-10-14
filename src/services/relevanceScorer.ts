@@ -151,6 +151,8 @@ function batches(
 
 /** Asks Jev whether each tool call is still needed for the current goal. */
 export class JevRelevanceScorer implements RelevanceScorer {
+  private readonly cache = new Map<string, number>();
+
   constructor(private readonly asker: NoulAsker) {}
 
   async score(
@@ -158,15 +160,24 @@ export class JevRelevanceScorer implements RelevanceScorer {
     candidates: readonly ToolCandidate[],
     onUsage?: UsageReporter,
   ): Promise<ReadonlyMap<string, number>> {
-    const sentGoal = sendableGoal(goal, candidates);
     const scores = new Map<string, number>();
-    for (const batch of batches(sentGoal, candidates)) {
+    const uncached = candidates.filter((candidate) => {
+      const cached = this.cache.get(JSON.stringify([goal, candidate.toolUseId]));
+      if (cached === undefined) return true;
+      scores.set(candidate.toolUseId, cached);
+      return false;
+    });
+    const sentGoal = sendableGoal(goal, uncached);
+    for (const batch of batches(sentGoal, uncached)) {
       for (const [toolUseId, score] of await this.scoreBatch(
         sentGoal,
         batch,
         onUsage,
       )) {
         scores.set(toolUseId, score);
+        if (this.cache.size < 500) {
+          this.cache.set(JSON.stringify([goal, toolUseId]), score);
+        }
       }
     }
     return scores;

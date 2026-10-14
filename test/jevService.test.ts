@@ -525,3 +525,45 @@ test("reports usage across two batches without leaking into the next score", asy
   await scorer.score("goal", [candidate("next")], (usage) => next.push(usage));
   expect(next).toEqual([{ inputTokens: 100, outputTokens: 1 }]);
 });
+
+
+describe("relevance score cache", () => {
+  test("reuses scores for the same goal and sends only uncached candidates", async () => {
+    const requests: string[][] = [];
+    const scorer = scorerFor(async (_input, init) => {
+      const body = String(init?.body);
+      const request = JSON.parse(body) as {
+        state: { candidates: { tool_use_id: string }[] };
+      };
+      requests.push(request.state.candidates.map((item) => item.tool_use_id));
+      return responseForBatch(body);
+    });
+    const first = await scorer.score("goal", [candidate("a"), candidate("b")]);
+    expect(await scorer.score("goal", [candidate("a"), candidate("b")])).toEqual(first);
+    expect(requests).toEqual([["a", "b"]]);
+    const mixed = await scorer.score("goal", [candidate("b"), candidate("c")]);
+    expect(mixed.get("b")).toBe(first.get("b"));
+    expect(mixed.get("c")).toBe(0.91);
+    expect(requests).toEqual([["a", "b"], ["c"]]);
+  });
+
+  test("asks again when the goal changes and retains separate goal scores", async () => {
+    const goals: string[] = [];
+    const scorer = scorerFor(async (_input, init) => {
+      const body = String(init?.body);
+      goals.push((JSON.parse(body) as { state: { current_goal: string } }).state.current_goal);
+      return responseForBatch(body);
+    });
+    await scorer.score("first goal", [candidate("a")]);
+    await scorer.score("second goal", [candidate("a")]);
+    await scorer.score("first goal", [candidate("a")]);
+    expect(goals).toEqual(["first goal", "second goal"]);
+  });
+
+  test("bounds the cache to 500 entries", async () => {
+    const scorer = scorerFor(async (_input, init) => responseForBatch(String(init?.body)));
+    await scorer.score("goal", Array.from({ length: 550 }, (_, i) => candidate(`call-${i}`)));
+    const cache = (scorer as unknown as { cache: Map<string, number> }).cache;
+    expect(cache.size).toBeLessThanOrEqual(500);
+  });
+});
