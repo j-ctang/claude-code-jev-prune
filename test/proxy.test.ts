@@ -959,6 +959,11 @@ test(
         HOME: temporaryHome,
         PORT: String(port),
         JEV_PRUNE_ENABLED: "false",
+        NODE_ENV: "production",
+        JEV_MODEL: "startup-test-model",
+        JEV_TIMEOUT_MS: "4321",
+        TYPESAFE_API_KEY: "startup-test-typesafe-secret",
+        ANTHROPIC_API_KEY: "startup-test-anthropic-secret",
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -981,6 +986,20 @@ test(
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
       expect(output).toContain("proxy_listening");
+      const startupLine = output
+        .split("\n")
+        .find((line) => line.includes("proxy_listening"));
+      expect(JSON.parse(startupLine!)).toEqual({
+        level: "info",
+        message: "proxy_listening",
+        timestamp: expect.any(String),
+        port,
+        pruningEnabled: false,
+        jevModel: "startup-test-model",
+        jevTimeoutMs: 4321,
+      });
+      expect(output).not.toContain("startup-test-typesafe-secret");
+      expect(output).not.toContain("startup-test-anthropic-secret");
 
       const health = await fetch(`http://127.0.0.1:${port}/health`);
       expect(health.status).toBe(200);

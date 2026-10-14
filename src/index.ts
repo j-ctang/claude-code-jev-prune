@@ -96,6 +96,8 @@ async function start(
     logger.info("proxy_listening", {
       port: config.port,
       pruningEnabled: config.pruningEnabled,
+      jevModel: config.jevModel,
+      jevTimeoutMs: config.jevTimeoutMs,
     });
   });
 
