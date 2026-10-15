@@ -229,10 +229,10 @@ describe("Anthropic proxy", () => {
     const shadow = new SkillShadow({ catalog, judge: async () => 0.99 });
     const pruned = { messages: [{ role: "user" as const, content: "Create report." }] };
     try {
-      await request(createApp({
+      await request(await serve(createApp({
         config, shadowObserver: new SkillShadowObserver(shadow, logger), logger, fetchFn: fetch, startedAt: Date.now(),
         pruner: { prune: async () => ({ request: pruned, beforeTokens: 0, afterTokens: 0, evaluated: 0, dropped: 0, reason: "disabled" }) },
-      }))
+      })))
         .post("/v1/messages")
         .set("x-claude-code-session-id", "session-a")
         .send({ messages: [{ role: "user", content: `Create report.\n${skillBody}` }] })
@@ -259,7 +259,7 @@ describe("Anthropic proxy", () => {
     const shadow = new SkillShadow({ catalog, judge: async () => 0.99 });
     const body = { messages: [{ role: "user", content: `Create a report.\n${skillBody}` }] };
     try {
-      const result = await request(appFor(upstream.url, { score: async () => new Map() }, { skillShadow: true }, logger, shadow))
+      const result = await request(await serve(appFor(upstream.url, { score: async () => new Map() }, { skillShadow: true }, logger, shadow)))
         .post("/v1/messages")
         .set("x-claude-code-session-id", "session-a")
         .send(body)

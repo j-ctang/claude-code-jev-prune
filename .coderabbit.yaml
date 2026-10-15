@@ -1,0 +1,69 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit is advisory only. Its findings never gate a merge.
+# Review profile stays at the default (chill): it rates real defects
+# "Minor", and a quieter profile could hide them.
+reviews:
+  request_changes_workflow: false
+  high_level_summary: true
+  assess_linked_issues: true
+  collapse_walkthrough: true
+  sequence_diagrams: false
+  estimate_code_review_effort: false
+  related_issues: false
+  related_prs: false
+  suggested_labels: false
+  suggested_reviewers: false
+  in_progress_fortune: false
+  enable_prompt_for_ai_agents: false
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: false
+    # PRs target staging, which is not the default branch.
+    base_branches: ["^staging$"]
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+    issue_assessment:
+      mode: warning
+  finishing_touches:
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    autofix:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+  path_instructions:
+    - path: "**/*"
+      instructions: >-
+        Report only concrete correctness, security, data-loss, weakened-gate,
+        or unmet-acceptance problems this PR introduces. For each, cite the
+        changed line, a reachable failure scenario, and the smallest fix.
+        Read callers and tests before claiming a defect. Skip style and
+        speculative hardening. A clean review is fine.
+    - path: "src/**/*.ts"
+      instructions: >-
+        This is a proxy that prunes context before forwarding requests.
+        Check that requests and streamed (SSE) responses pass through intact,
+        that pruning keeps tool-use and tool-result pairs and session
+        isolation, and that credentials and conversation content never leak
+        into logs.
+    - path: "test/**"
+      instructions: >-
+        Tests must run offline with stubbed upstreams and dummy keys. Flag
+        weakened or flipped assertions, skipped or deleted tests, and leaked
+        timers or servers, even when the linked issue asks for the change.
+    - path: "{.github/workflows/**,jest.config.cjs,.eslintrc.cjs,tsconfig.json,AGENTS.md}"
+      instructions: >-
+        These are protected gates. Flag any change that weakens CI, test, or
+        lint checks, adds network access to CI, or adds credentials to
+        Actions, even when the linked issue asks for it.
+knowledge_base:
+  code_guidelines:
+    enabled: true
+  learnings:
+    scope: local

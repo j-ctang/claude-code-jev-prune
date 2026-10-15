@@ -5,6 +5,7 @@ import type {
   PruneResult,
   RelevanceScorer,
   ToolCandidate,
+  UsageReporter,
 } from "../types.js";
 import type { AppLogger } from "../utils/logger.js";
 import { estimateTokens } from "../utils/tokenCounter.js";
@@ -114,6 +115,11 @@ export class ContextPruner {
 
     let current = request;
     let newRewrites = false;
+    const usage = { typesafeInputTokens: 0, typesafeOutputTokens: 0 };
+    const onUsage: UsageReporter = ({ inputTokens, outputTokens }) => {
+      usage.typesafeInputTokens += inputTokens;
+      usage.typesafeOutputTokens += outputTokens;
+    };
     try {
       const candidates = extractCandidates(request);
       if (candidates.length === 0) {
@@ -218,7 +224,13 @@ export class ContextPruner {
         : eligible.filter((candidate) => !this.memory.isKept(candidate));
       const newlyDropped =
         toScore.length > 0
-          ? await this.score(turn.goal, toScore, rewrites, rewrittenTokens)
+          ? await this.score(
+              turn.goal,
+              toScore,
+              rewrites,
+              rewrittenTokens,
+              onUsage,
+            )
           : [];
       for (const candidate of newlyDropped) dropped.add(candidate.toolUseId);
 
@@ -273,6 +285,7 @@ export class ContextPruner {
         superseded: newStubs.size,
         trimmed,
         reason: "pruned",
+        ...usage,
         manual,
         aboveTarget,
         notice,
@@ -286,6 +299,7 @@ export class ContextPruner {
         evaluated: 0,
         dropped: 0,
         reason: "fail-open",
+        ...usage,
         failureReason: loggableReason(error),
       };
     }
@@ -312,6 +326,7 @@ export class ContextPruner {
     candidates: readonly ToolCandidate[],
     rewrites: ReadonlyMap<string, unknown>,
     tokens: number,
+    onUsage: UsageReporter,
   ): Promise<ToolCandidate[]> {
     const scores = await this.scorer.score(
       goal,
@@ -320,6 +335,7 @@ export class ContextPruner {
           ? { ...candidate, result: rewrites.get(candidate.toolUseId) }
           : candidate,
       ),
+      onUsage,
     );
     const cutoff = tokens >= this.config.triggerTokens ? 0.7 : 0.5;
     const scored = candidates.map((candidate) => {
