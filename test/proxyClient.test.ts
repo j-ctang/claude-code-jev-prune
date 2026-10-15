@@ -97,3 +97,124 @@ describe("ProxyClient", () => {
     );
   });
 });
+
+describe("ProxyClient.watch", () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  test("restarts the proxy when a tick finds it down", async () => {
+    const { state, fetch } = fakeProxy({ up: false });
+    const client = new ProxyClient(5590, {
+      ...noProcess,
+      fetch,
+      startProcess: () => {
+        state.starts += 1;
+        state.up = true;
+        return { exited: () => false };
+      },
+      sleep: async () => undefined,
+    });
+
+    const stopWatching = client.watch(1_000);
+    await jest.advanceTimersByTimeAsync(999);
+    expect(state.starts).toBe(0);
+    await jest.advanceTimersByTimeAsync(1);
+    expect(state.starts).toBe(1);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(state.starts).toBe(1);
+    stopWatching();
+  });
+
+  test("does not start a second check while one is still running", async () => {
+    const { state, fetch } = fakeProxy({ up: false });
+    let finishStart = () => undefined as void;
+    const client = new ProxyClient(5590, {
+      ...noProcess,
+      fetch,
+      startProcess: () => {
+        state.starts += 1;
+        return { exited: () => false };
+      },
+      sleep: () =>
+        new Promise<void>((done) => {
+          finishStart = () => {
+            state.up = true;
+            done();
+          };
+        }),
+    });
+
+    const stopWatching = client.watch(1_000);
+    await jest.advanceTimersByTimeAsync(3_000);
+    expect(state.starts).toBe(1);
+    finishStart();
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(state.starts).toBe(1);
+    stopWatching();
+  });
+
+  test("keeps ticking after a failed restart", async () => {
+    const { state, fetch } = fakeProxy({ up: false });
+    const client = new ProxyClient(5590, {
+      ...noProcess,
+      fetch,
+      startProcess: () => {
+        state.starts += 1;
+        return { exited: () => true };
+      },
+    });
+
+    const stopWatching = client.watch(1_000);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(state.starts).toBe(1);
+    await jest.advanceTimersByTimeAsync(1_000);
+    expect(state.starts).toBe(2);
+    stopWatching();
+  });
+
+  test("stops ticking once the returned function is called", async () => {
+    const { state, fetch } = fakeProxy({ up: false });
+    const client = new ProxyClient(5590, {
+      ...noProcess,
+      fetch,
+      startProcess: () => {
+        state.starts += 1;
+        return { exited: () => true };
+      },
+    });
+
+    client.watch(1_000)();
+    await jest.advanceTimersByTimeAsync(5_000);
+    expect(state.starts).toBe(0);
+  });
+});
+
+describe("ProxyClient.stop", () => {
+  let kill: jest.SpiedFunction<typeof process.kill>;
+  beforeEach(() => {
+    kill = jest.spyOn(process, "kill").mockImplementation(() => true);
+  });
+  afterEach(() => kill.mockRestore());
+
+  test("sends SIGTERM to the pid the proxy reports", async () => {
+    const { fetch } = fakeProxy({ up: true });
+    await new ProxyClient(5590, { ...noProcess, fetch }).stop();
+
+    expect(kill).toHaveBeenCalledTimes(1);
+    expect(kill).toHaveBeenCalledWith(42, "SIGTERM");
+  });
+
+  test("does nothing when no proxy answers", async () => {
+    const { fetch } = fakeProxy({ up: false });
+    await new ProxyClient(5590, { ...noProcess, fetch }).stop();
+
+    expect(kill).not.toHaveBeenCalled();
+  });
+
+  test("does nothing when another program holds the port", async () => {
+    const { fetch } = fakeProxy({ up: true, body: { pid: 7 } });
+    await new ProxyClient(5590, { ...noProcess, fetch }).stop();
+
+    expect(kill).not.toHaveBeenCalled();
+  });
+});
