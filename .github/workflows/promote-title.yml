@@ -1,0 +1,35 @@
+name: Promote title
+
+# CodeRabbit skips PRs titled "Promote staging to main". Only real promote
+# PRs may use that title, so other PRs keep their CodeRabbit review.
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-title-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  promote-title:
+    name: promote-title
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Event values go through env, never inline, so a title cannot inject shell.
+      - name: Check promote title
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BASE: ${{ github.event.pull_request.base.ref }}
+          PR_HEAD: ${{ github.event.pull_request.head.ref }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPO: ${{ github.repository }}
+        run: bash scripts/check-promote-title.sh
