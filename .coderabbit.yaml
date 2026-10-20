@@ -21,6 +21,10 @@ reviews:
     drafts: false
     # PRs target staging, which is not the default branch.
     base_branches: ["^staging$"]
+    # PRs into main (the default branch) are always reviewed and cannot be
+    # excluded by branch. Promote PRs carry only changes already reviewed in
+    # staging, so skip them by their fixed title.
+    ignore_title_keywords: ["Promote staging to main"]
   pre_merge_checks:
     docstrings:
       mode: "off"
