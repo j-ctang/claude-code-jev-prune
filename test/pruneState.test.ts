@@ -1,13 +1,13 @@
-import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import {
   createFileStateStore,
   type Rewrite,
 } from "../src/services/pruneState.js";
 
 async function statePath(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "jev-prune-state-"));
+  const directory = tempDir("jev-prune-state-");
   return join(directory, "nested", "state.json");
 }
 

@@ -1,11 +1,11 @@
 import { once } from "node:events";
-import { mkdtemp, readFile, stat } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import { createLogger } from "../src/utils/logger.js";
 
 test("writes structured events to an injected log path", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "jev-prune-log-"));
+  const directory = tempDir("jev-prune-log-");
   const logPath = join(directory, "nested", "jev-prune.log");
   const logger = createLogger({ logPath, console: false });
 
@@ -26,7 +26,7 @@ test("writes structured events to an injected log path", async () => {
 });
 
 test("writes debug events when configured for debug level", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "jev-prune-debug-log-"));
+  const directory = tempDir("jev-prune-debug-log-");
   const logPath = join(directory, "jev-prune.log");
   const logger = createLogger({ logPath, console: false, level: "debug" });
 

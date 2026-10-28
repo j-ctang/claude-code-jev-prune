@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import { spawn } from "node:child_process";
-import { mkdtemp } from "node:fs/promises";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import {
   createServer,
@@ -12,6 +11,7 @@ import {
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import request from "supertest";
 import type { Config } from "../src/config.js";
 import { createApp } from "../src/app.js";
@@ -401,7 +401,7 @@ describe("Anthropic proxy", () => {
       response.end("{}");
     });
     const statePath = join(
-      await mkdtemp(join(tmpdir(), "jev-canary-command-")),
+      tempDir("jev-canary-command-"),
       "state.json",
     );
     const app = appFor(
@@ -457,7 +457,7 @@ describe("Anthropic proxy", () => {
       response.writeHead(200, { "content-type": "application/json" });
       response.end("{}");
     });
-    const statePath = join(await mkdtemp(join(tmpdir(), "jev-canary-off-")), "state.json");
+    const statePath = join(tempDir("jev-canary-off-"), "state.json");
     const app = appFor(upstream.url, {
       async score(_goal, candidates) {
         return new Map(candidates.map((candidate) => [candidate.toolUseId, 0.1]));
@@ -951,7 +951,7 @@ test(
     const port = (reservation.address() as AddressInfo).port;
     reservation.close();
     await once(reservation, "close");
-    const temporaryHome = await mkdtemp(join(tmpdir(), "jev-prune-home-"));
+    const temporaryHome = tempDir("jev-prune-home-");
     const child = spawn(process.execPath, ["dist/index.js"], {
       cwd: process.cwd(),
       env: {

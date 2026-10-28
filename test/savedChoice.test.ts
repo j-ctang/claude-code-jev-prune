@@ -1,11 +1,11 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import { canaryAutoPrune } from "../src/services/canary.js";
 import { routeChoice } from "../src/services/modelRouter.js";
 
 const statePath = async () =>
-  join(await mkdtemp(join(tmpdir(), "jev-choice-")), "state.json");
+  join(tempDir("jev-choice-"), "state.json");
 
 test("remembers automatic pruning across proxy restarts", async () => {
   const path = await statePath();
