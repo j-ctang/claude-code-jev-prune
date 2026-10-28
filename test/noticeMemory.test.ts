@@ -1,6 +1,6 @@
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import { NoticeMemory } from "../src/services/noticeMemory.js";
 import type { AnthropicRequest, Message } from "../src/types.js";
 
@@ -163,7 +163,7 @@ describe("NoticeMemory", () => {
   describe("saved to a file", () => {
     const statePath = () =>
       join(
-        mkdtempSync(join(tmpdir(), "jev-notices-")),
+        tempDir("jev-notices-"),
         "nested",
         "notices.json",
       );

@@ -1,10 +1,10 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 
 test("one command sets up once and launches Claude on every run", () => {
-  const root = mkdtempSync(join(tmpdir(), "jev-bootstrap-"));
+  const root = tempDir("jev-bootstrap-");
   const project = join(root, "project");
   const fakeBin = join(root, "fake-bin");
   mkdirSync(project);

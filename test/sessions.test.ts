@@ -1,6 +1,6 @@
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import {
   liveSessions,
   readSessionProjects,
@@ -10,7 +10,7 @@ import {
 } from "../src/sessions.js";
 
 test("counts live launchers and forgets crashed ones", () => {
-  const directory = join(mkdtempSync(join(tmpdir(), "jev-sessions-")), "5590");
+  const directory = join(tempDir("jev-sessions-"), "5590");
   expect(liveSessions(directory)).toEqual([]);
 
   registerSession(directory, process.pid);
@@ -23,7 +23,7 @@ test("counts live launchers and forgets crashed ones", () => {
 });
 
 test("remembers when a proxy has served concurrent launchers", () => {
-  const directory = join(mkdtempSync(join(tmpdir(), "jev-shared-sessions-")), "5590");
+  const directory = join(tempDir("jev-shared-sessions-"), "5590");
   registerSession(directory, process.pid);
   expect(wasShared(directory)).toBe(false);
   registerSession(directory, process.ppid);
@@ -38,7 +38,7 @@ test("remembers when a proxy has served concurrent launchers", () => {
 
 test("reads project roots only from live launchers", () => {
   const directory = join(
-    mkdtempSync(join(tmpdir(), "jev-session-projects-")),
+    tempDir("jev-session-projects-"),
     "5590",
   );
   registerSession(directory, process.pid, "/tmp/project-a");

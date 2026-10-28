@@ -1,6 +1,5 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import { CanaryMonitor, CanaryPolicy } from "../src/services/canary.js";
 import { identifyConversation } from "../src/services/conversation.js";
 import { readTurn } from "../src/services/turn.js";
@@ -73,7 +72,7 @@ test("checks a completed reply when hook context follows the user turn", () => {
 });
 
 test("subagent replies never count as canary misses", async () => {
-  const statePath = join(await mkdtemp(join(tmpdir(), "jev-canary-")), "s");
+  const statePath = join(tempDir("jev-canary-"), "s");
   const logger = {
     info: () => undefined,
     warn: () => undefined,

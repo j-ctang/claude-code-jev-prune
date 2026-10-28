@@ -1,6 +1,5 @@
-import { mkdtemp } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { tempDir } from "./tempDir.js";
 import {
   identifyConversation,
   type Conversation,
@@ -91,7 +90,7 @@ const thread = (session = "s", agent?: string): Conversation =>
   identifyConversation(turn([]), session, agent);
 
 async function router(asker: NoulAsker, choice?: "auto" | "off") {
-  const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "mode.json");
+  const path = join(tempDir("jev-router-"), "mode.json");
   const mode = routeChoice(path);
   if (choice) mode.set(choice);
   return { router: new ModelRouter(config, asker, mode, silentLogger), path };
@@ -384,7 +383,7 @@ describe("ModelRouter in auto mode", () => {
 
 describe("ModelRouter memory", () => {
   test("evicts the least recently used conversation", async () => {
-    const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
+    const path = join(tempDir("jev-router-"), "m.json");
     const mode = routeChoice(path);
     mode.set("auto");
     const subject = new ModelRouter(
@@ -446,7 +445,7 @@ describe("ModelRouter in ask mode", () => {
   });
 
   test("a failed save does not switch up", async () => {
-    const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
+    const path = join(tempDir("jev-router-"), "m.json");
     const mode = routeChoice(path);
     mode.set = () => {
       throw new Error("disk full");
@@ -515,7 +514,7 @@ describe("ModelRouter in ask mode", () => {
   });
 
   test("does not ask or call Jev when notices are off", async () => {
-    const path = join(await mkdtemp(join(tmpdir(), "jev-router-")), "m.json");
+    const path = join(tempDir("jev-router-"), "m.json");
     const asker = scriptedAsker({ hard: 0.9, continues: 0 });
     const subject = new ModelRouter(
       { ...config, notify: false },
