@@ -942,64 +942,176 @@ describe("Anthropic proxy", () => {
   });
 });
 
-test(
-  "starts from the built entry point and exits cleanly on SIGTERM",
-  async () => {
-    const reservation = createServer();
-    reservation.listen(0, "127.0.0.1");
-    await once(reservation, "listening");
-    const port = (reservation.address() as AddressInfo).port;
-    reservation.close();
-    await once(reservation, "close");
-    const temporaryHome = tempDir("jev-prune-home-");
-    const child = spawn(process.execPath, ["dist/index.js"], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        HOME: temporaryHome,
-        PORT: String(port),
-        JEV_PRUNE_ENABLED: "false",
+test("starts from the built entry point and exits cleanly on SIGTERM", async () => {
+  // Keep the configured port occupied: releasing a reservation before spawn
+  // lets another process claim it before the child can listen.
+  const decoy = createServer((_request, response) => {
+    response.writeHead(503);
+    response.end("decoy");
+  });
+  try {
+    decoy.listen(0, "127.0.0.1");
+    await once(decoy, "listening");
+    const configuredPort = (decoy.address() as AddressInfo).port;
+    // The production config rejects PORT=0. Only this child substitutes an
+    // atomic OS allocation, while still running the real built entry point.
+    const preload = `
+        import { Server } from 'node:net';
+        const listen = Server.prototype.listen;
+        Server.prototype.listen = function (...args) {
+          if (args[0] !== Number(process.env.PORT) || args[1] !== '127.0.0.1') {
+            return Reflect.apply(listen, this, args);
+          }
+          Server.prototype.listen = listen;
+          this.once('listening', () => {
+            process.send({ type: 'test-listening', port: this.address().port },
+              () => process.disconnect());
+          });
+          args[0] = 0;
+          return Reflect.apply(listen, this, args);
+        };
+      `;
+    const preloadUrl = `data:text/javascript;base64,${Buffer.from(preload).toString("base64")}`;
+    const child = spawn(
+      process.execPath,
+      ["--import", preloadUrl, "dist/index.js"],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          HOME: tempDir("jev-prune-home-"),
+          PORT: String(configuredPort),
+          JEV_PRUNE_ENABLED: "false",
+        },
+        stdio: ["ignore", "pipe", "pipe", "ipc"],
       },
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    );
     let output = "";
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      output += chunk;
+    let spawnError: Error | undefined;
+    let checkReady = () => {};
+    const onError = (error: Error) => {
+      spawnError = error;
+      checkReady();
+    };
+    child.on("error", onError);
+    // Observe exit from spawn onward, including during health checks.
+    const exited = new Promise<{
+      code: number | null;
+      signal: NodeJS.Signals | null;
+    }>((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal }));
     });
-    child.stderr.on("data", (chunk: string) => {
+    const capture = (chunk: string) => {
       output += chunk;
-    });
+      checkReady();
+    };
+    child.stdout!.setEncoding("utf8");
+    child.stderr!.setEncoding("utf8");
+    child.stdout!.on("data", capture);
+    child.stderr!.on("data", capture);
 
-    try {
-      const deadline = Date.now() + 5_000;
-      while (!output.includes("proxy_listening") && Date.now() < deadline) {
-        if (child.exitCode !== null) {
-          throw new Error(`Proxy exited before startup: ${output}`);
-        }
-        await new Promise((resolve) => setTimeout(resolve, 25));
+    const within = async <T>(promise: Promise<T>, ms: number, label: string) => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        return await Promise.race([
+          promise,
+          new Promise<never>((_resolve, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`${label} timed out: ${output}`)),
+              ms,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
       }
-      expect(output).toContain("proxy_listening");
+    };
 
-      const health = await fetch(`http://127.0.0.1:${port}/health`);
+    let actualPort: number | undefined;
+    let invalidMessage = false;
+    const onMessage = (message: unknown) => {
+      if (
+        typeof message !== "object" ||
+        message === null ||
+        !("type" in message) ||
+        message.type !== "test-listening" ||
+        !("port" in message) ||
+        typeof message.port !== "number" ||
+        !Number.isInteger(message.port) ||
+        message.port < 1 ||
+        message.port > 65_535
+      ) {
+        invalidMessage = true;
+      } else {
+        actualPort = message.port;
+      }
+      checkReady();
+    };
+    try {
+      const ready = new Promise<number>((resolve, reject) => {
+        checkReady = () => {
+          if (spawnError) reject(spawnError);
+          else if (invalidMessage)
+            reject(new Error("Invalid child listening message"));
+          else if (
+            actualPort !== undefined &&
+            output.includes("proxy_listening")
+          ) {
+            resolve(actualPort);
+          }
+        };
+        child.on("message", onMessage);
+        void exited.then(({ code, signal }) => {
+          reject(
+            new Error(
+              `Proxy exited before startup (${code}, ${signal}): ${output}`,
+            ),
+          );
+        });
+        checkReady();
+      });
+      const port = await within(ready, 4_000, "Proxy startup");
+      child.removeListener("message", onMessage);
+      checkReady = () => {};
+      expect(port).not.toBe(configuredPort);
+      const health = await fetch(`http://127.0.0.1:${port}/health`, {
+        signal: AbortSignal.timeout(1_000),
+      });
       expect(health.status).toBe(200);
       expect(await health.json()).toEqual(
-        expect.objectContaining({
-          status: "ok",
-          pruning_enabled: false,
-        }),
+        expect.objectContaining({ status: "ok", pruning_enabled: false }),
       );
 
-      child.kill("SIGTERM");
-      const [code, signal] = (await once(child, "exit")) as [
-        number | null,
-        NodeJS.Signals | null,
-      ];
-      expect({ code, signal }).toEqual({ code: 0, signal: null });
+      expect(spawnError).toBeUndefined();
+      expect(child.exitCode).toBeNull();
+      expect(child.signalCode).toBeNull();
+      expect(child.kill("SIGTERM")).toBe(true);
+      expect(await within(exited, 2_000, "Proxy shutdown")).toEqual({
+        code: 0,
+        signal: null,
+      });
     } finally {
-      if (child.exitCode === null) child.kill("SIGKILL");
+      try {
+        if (
+          child.pid !== undefined &&
+          child.exitCode === null &&
+          child.signalCode === null
+        ) {
+          child.kill("SIGKILL");
+          await within(exited, 1_000, "Proxy cleanup");
+        }
+      } finally {
+        child.removeListener("message", onMessage);
+        child.removeListener("error", onError);
+        child.stdout!.removeListener("data", capture);
+        child.stderr!.removeListener("data", capture);
+      }
     }
-  },
-  10_000,
-);
+  } finally {
+    if (decoy.listening) {
+      await new Promise<void>((resolve, reject) => {
+        decoy.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  }
+}, 10_000);
