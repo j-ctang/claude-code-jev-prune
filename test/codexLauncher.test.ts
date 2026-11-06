@@ -35,7 +35,7 @@ const value = args.find(a => a.startsWith('model_providers.jev_prune.base_url=')
 const url = value ? JSON.parse(value.slice(value.indexOf('=')+1)) : '';
 (async()=>{
  const response = await fetch(url+'/responses', {method:'POST', headers:{'content-type':'application/json'}, body:'{}'});
- fs.writeFileSync(process.env.RECEIPT, JSON.stringify({args,url,status:response.status,body:await response.text(),cwd:process.cwd(),pid:process.pid}));
+ fs.writeFileSync(process.env.RECEIPT, JSON.stringify({args,url,status:response.status,body:await response.text(),cwd:process.cwd(),pid:process.pid,typesafeKeyPresent: Boolean(process.env.TYPESAFE_API_KEY)}));
  ${wait ? "setInterval(()=>{},1000); process.on('SIGTERM',()=>process.exit(0));" : "process.exit(7);"}
 })().catch(e=>{console.error(e.message);process.exit(9)});
 `,
@@ -62,14 +62,15 @@ const url = value ? JSON.parse(value.slice(value.indexOf('=')+1)) : '';
 
 it("routes invocation-only provider overrides and propagates child exit status", async () => {
   const { receipt, env, home } = await setup();
-  const code = await launchCodex(
-    ["exec", "--model", "test-model", "hello"],
-    env,
-  );
+  const code = await launchCodex(["exec", "--model", "test-model", "hello"], {
+    ...env,
+    TYPESAFE_API_KEY: "parent-only-dummy",
+  });
   expect(code).toBe(7);
   const observed = JSON.parse(readFileSync(receipt, "utf8"));
   expect(observed.status).toBe(200);
   expect(observed.body).toBe("upstream OK");
+  expect(observed.typesafeKeyPresent).toBe(false);
   expect(observed.args).toContain('model_provider="jev_prune"');
   expect(observed.args).toContain(
     "model_providers.jev_prune.requires_openai_auth=true",
