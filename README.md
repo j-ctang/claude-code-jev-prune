@@ -90,7 +90,7 @@ Settings are in `.env` in this folder. The useful ones:
 | `JEV_ROUTE_HARD_MODEL` | `claude-fable-5-1` | Model for hard prompts |
 | `PORT` | `5590` | Local port for the proxy |
 
-All settings are listed in [.env.example](./.env.example).
+Claude Code settings are listed in [.env.example](./.env.example).
 
 ## Troubleshooting
 
