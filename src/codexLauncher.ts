@@ -91,7 +91,11 @@ export async function launchCodex(
     ]
       .filter(Boolean)
       .join(",");
-    const childEnv = { ...env, NO_PROXY: noProxy, no_proxy: noProxy };
+    const childEnv: NodeJS.ProcessEnv = {
+      ...env,
+      NO_PROXY: noProxy,
+      no_proxy: noProxy,
+    };
     delete childEnv.TYPESAFE_API_KEY;
     const child = spawn("codex", [...overrides, ...args], {
       stdio: "inherit",
