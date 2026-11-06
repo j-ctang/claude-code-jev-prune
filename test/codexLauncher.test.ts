@@ -2,11 +2,19 @@ import { writeFileSync, readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { once } from "node:events";
 import { createServer, type Server } from "node:http";
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { launchCodex } from "../src/codexLauncher.js";
 import { tempDir } from "./tempDir.js";
 
 const servers: Server[] = [];
+beforeAll(() => {
+  // Keep focused tests independent of a prior build and exercise the shipped entry.
+  execFileSync(process.execPath, [
+    "node_modules/typescript/bin/tsc",
+    "-p",
+    "tsconfig.json",
+  ]);
+}, 10000);
 afterEach(async () => {
   await Promise.all(
     servers.splice(0).map((server) => {
@@ -100,7 +108,7 @@ it.each(["SIGTERM", "SIGINT", "SIGHUP"] as const)(
     const { env, receipt } = await setup(true);
     const child = spawn(
       process.execPath,
-      ["--import", "tsx", "src/codexLaunch.ts", "exec", "hello"],
+      ["dist/codexLaunch.js", "exec", "hello"],
       { env, stdio: "pipe" },
     );
     const exit = once(child, "exit");

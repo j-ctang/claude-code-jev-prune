@@ -76,6 +76,8 @@ async function forward(
   };
   request.on("aborted", abort);
   response.on("close", close);
+  options.signal?.addEventListener("abort", abort, { once: true });
+  if (options.signal?.aborted) abort();
   try {
     const path = request.url ?? "/";
     if (!path.startsWith("/")) {
@@ -125,14 +127,11 @@ async function forward(
         /* Parsing or scoring failure leaves the original bytes intact. */
       }
     }
-    const signal = options.signal
-      ? AbortSignal.any([controller.signal, options.signal])
-      : controller.signal;
     const upstream = await options.fetchFn(`${base}${path}`, {
       method: request.method ?? "GET",
       headers,
       redirect: "manual",
-      signal,
+      signal: controller.signal,
       ...(request.method !== "GET" && request.method !== "HEAD"
         ? { body: new Uint8Array(raw) }
         : {}),
@@ -152,5 +151,6 @@ async function forward(
   } finally {
     request.off("aborted", abort);
     response.off("close", close);
+    options.signal?.removeEventListener("abort", abort);
   }
 }
