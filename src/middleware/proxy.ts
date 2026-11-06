@@ -74,7 +74,7 @@ function hopByHopFilter(
   return blockedHeaders;
 }
 
-function requestHeaders(request: Request): Headers {
+export function requestHeaders(request: Pick<Request, "headers">): Headers {
   const headers = new Headers();
   const blockedHeaders = hopByHopFilter(
     REQUEST_HEADER_BLOCKLIST,
@@ -93,9 +93,9 @@ function requestHeaders(request: Request): Headers {
   return headers;
 }
 
-function copyResponseHeaders(
+export function copyResponseHeaders(
   upstream: globalThis.Response,
-  response: Response,
+  response: { setHeader(name: string, value: string): unknown },
 ) {
   const blockedHeaders = hopByHopFilter(
     RESPONSE_HEADER_BLOCKLIST,
