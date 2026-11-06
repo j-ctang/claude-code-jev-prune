@@ -1,5 +1,7 @@
 # Jev Prune for Claude Code
 
+For experimental Codex CLI support, see [Codex CLI](CODEX.md).
+
 Jev Prune keeps long Claude Code sessions sharp. It removes old tool results (big file reads, long terminal output) that no longer matter to what you are doing now. Your chat history in the terminal stays the same; only the context sent to Claude gets smaller.
 
 It runs on your machine as a small proxy between Claude Code and Anthropic.
@@ -88,7 +90,7 @@ Settings are in `.env` in this folder. The useful ones:
 | `JEV_ROUTE_HARD_MODEL` | `claude-fable-5-1` | Model for hard prompts |
 | `PORT` | `5590` | Local port for the proxy |
 
-All settings are listed in [.env.example](./.env.example).
+Claude Code settings are listed in [.env.example](./.env.example).
 
 ## Troubleshooting
 
