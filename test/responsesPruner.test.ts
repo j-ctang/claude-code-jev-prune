@@ -314,3 +314,46 @@ describe("ResponsesPruner", () => {
     ).toBe(1);
   });
 });
+
+it.each([false, true])(
+  "stubs text-only output arrays (custom=%s)",
+  async (custom) => {
+    const items = pair("array", custom);
+    items[1] = {
+      ...items[1],
+      output: [
+        { type: "input_text", text: output },
+        { type: "input_text", text: "second block" },
+      ],
+    };
+    const original = request([...items, user]);
+    const result = await new ResponsesPruner({
+      config: config(),
+      scorer,
+    }).prune(original);
+    expect(result.dropped).toBe(1);
+    expect(result.request.input).toEqual([
+      items[0],
+      { ...items[1], output: [{ type: "input_text", text: DROPPED_STUB }] },
+      user,
+    ]);
+    expect(original.input[1]).toEqual(items[1]);
+  },
+);
+
+it.each([
+  [
+    { type: "input_text", text: output },
+    { type: "input_image", image_url: "opaque" },
+  ],
+  [{ type: "unknown", text: output }],
+  [{ type: "input_text", text: 7 }],
+  [],
+])("preserves rich and malformed output arrays", (...blocks) => {
+  const items = pair("rich-array", true);
+  items[1] = { ...items[1], output: blocks };
+  const original = request([...items, user]);
+  return expect(
+    new ResponsesPruner({ config: config(), scorer }).prune(original),
+  ).resolves.toMatchObject({ request: original, dropped: 0 });
+});

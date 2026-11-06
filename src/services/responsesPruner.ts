@@ -23,6 +23,26 @@ function isItem(value: unknown): value is Item {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isTextOutput(value: unknown): boolean {
+  return (
+    typeof value === "string" ||
+    (Array.isArray(value) &&
+      value.length > 0 &&
+      value.every(
+        (block) =>
+          isItem(block) &&
+          block.type === "input_text" &&
+          typeof block.text === "string",
+      ))
+  );
+}
+
+function stubOutput(value: unknown): unknown {
+  return Array.isArray(value)
+    ? [{ type: "input_text", text: DROPPED_STUB }]
+    : DROPPED_STUB;
+}
+
 function userGoal(item: Item | undefined): string {
   if (
     !item ||
@@ -73,7 +93,7 @@ function candidates(items: Item[]): ToolCandidate[] {
       typeof call.name !== "string" ||
       !call.name ||
       typeof call[custom ? "input" : "arguments"] !== "string" ||
-      typeof result.output !== "string"
+      !isTextOutput(result.output)
     )
       continue;
     found.push({
@@ -129,7 +149,8 @@ export class ResponsesPruner {
     const allowed = all.filter(
       (candidate) =>
         !config.excludeTools.has(candidate.toolName) &&
-        estimateTokens(candidate.result) > estimateTokens(DROPPED_STUB),
+        estimateTokens(candidate.result) >
+          estimateTokens(stubOutput(candidate.result)),
     );
     const { dropped } = this.memory.recall(allowed);
     const render = () => {
@@ -142,7 +163,9 @@ export class ResponsesPruner {
       current = {
         ...request,
         input: items.map((item, index) =>
-          indices.has(index) ? { ...item, output: DROPPED_STUB } : item,
+          indices.has(index)
+            ? { ...item, output: stubOutput(item.output) }
+            : item,
         ),
       };
     };
