@@ -292,3 +292,63 @@ it("terminates a broken upstream stream", async () => {
   breakStream!();
   await expect(reader.read()).rejects.toThrow();
 });
+
+it("cancels active upstream streams on shutdown", async () => {
+  let disconnected: (() => void) | undefined;
+  const closed = new Promise<void>((resolve) => {
+    disconnected = resolve;
+  });
+  const upstream = await listen(
+    createServer((_req, res) => {
+      res.on("close", () => disconnected?.());
+      res.writeHead(200, { "content-type": "text/event-stream" });
+      res.write("data: first\n\n");
+    }),
+  );
+  const shutdown = new AbortController();
+  const url = await listen(
+    createCodexServer({
+      upstreamUrl: upstream,
+      pruner: unchanged,
+      fetchFn: fetch,
+      signal: shutdown.signal,
+    }),
+  );
+  const response = await fetch(url + "/responses", {
+    method: "POST",
+    body: "{}",
+  });
+  const reader = response.body!.getReader();
+  await reader.read();
+  shutdown.abort();
+  await expect(reader.read()).rejects.toThrow();
+  await closed;
+});
+
+it("rejects bodies above 32 MiB without hanging", async () => {
+  const { url } = await fixture((_req, res) => res.end("must not forward"));
+  const response = await fetch(url + "/responses", {
+    method: "POST",
+    body: Buffer.alloc(32 * 1024 * 1024 + 1, 120),
+  });
+  expect(response.status).toBe(413);
+  await response.text();
+});
+
+it("does not round unsafe integer metadata when pruning", async () => {
+  const { url } = await fixture(
+    async (req, res) => {
+      let raw = "";
+      for await (const chunk of req) raw += chunk;
+      res.end(raw);
+    },
+    { prune: async (body) => ({ request: { ...body, input: [] } }) },
+  );
+  const raw = '{"metadata":9007199254740993,"input":[]}';
+  const response = await fetch(url + "/responses", {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: raw,
+  });
+  expect(await response.text()).toBe(raw);
+});

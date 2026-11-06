@@ -20,6 +20,18 @@ interface Options {
 }
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 
+function hasUnsafeInteger(value: unknown): boolean {
+  if (typeof value === "number")
+    return (
+      !Number.isFinite(value) ||
+      (Number.isInteger(value) && !Number.isSafeInteger(value))
+    );
+  if (Array.isArray(value)) return value.some(hasUnsafeInteger);
+  if (typeof value === "object" && value !== null)
+    return Object.values(value).some(hasUnsafeInteger);
+  return false;
+}
+
 /** Credentials remain in transit; they are never read from or written to storage. */
 export function createCodexServer(options: Options) {
   const upstream = new URL(options.upstreamUrl);
@@ -76,7 +88,9 @@ async function forward(
       const buffer = Buffer.from(chunk);
       size += buffer.length;
       if (size > MAX_BODY_BYTES) {
-        response.writeHead(413).end();
+        response
+          .writeHead(413, { connection: "close" })
+          .end(() => request.destroy());
         return;
       }
       chunks.push(buffer);
@@ -95,7 +109,12 @@ async function forward(
     ) {
       try {
         const body: unknown = JSON.parse(raw.toString("utf8"));
-        if (typeof body === "object" && body !== null && !Array.isArray(body)) {
+        if (
+          typeof body === "object" &&
+          body !== null &&
+          !Array.isArray(body) &&
+          !hasUnsafeInteger(body)
+        ) {
           const prepared = await options.pruner.prune(
             body as Record<string, unknown>,
           );
