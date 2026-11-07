@@ -2,7 +2,7 @@ name: Check
 
 on:
   pull_request:
-    branches: [staging]
+    branches: [main, staging]
   push:
     branches: [main, staging]
   workflow_dispatch:
