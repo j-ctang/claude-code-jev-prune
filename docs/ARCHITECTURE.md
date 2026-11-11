@@ -1,196 +1,61 @@
 # Architecture
 
-## Scope
+Jev Prune has two HTTP proxy implementations sharing TypeSafe relevance scoring
+and persistent pruning decisions. Start at [AGENTS.md](../AGENTS.md) for task
+routing; load the linked contract for the subsystem you are changing.
 
-`claude-code-jev-prune` is a local HTTP proxy for Anthropic-compatible `/v1/*` requests. It prunes eligible tool context from `POST /v1/messages`; all other routes pass through without pruning.
-
-## Request Flow
-
-```text
-Claude Code
-  │
-  │ Anthropic request + Anthropic auth headers
-  ▼
-Express application
-  ├── GET /health ───────────────► local status response
-  └── /v1/*
-       ├── POST /v1/messages
-       │    ├── estimate tokens
-       │    ├── extract safe candidates
-       │    ├── apply protection policy
-       │    ├── score candidates with Jev
-       │    ├── stub selected pairs
-       │    └── route model
-       └── forward to ANTHROPIC_UPSTREAM_URL
-                    │
-                    ▼
-              Anthropic response
-                    │
-                    ▼
-          streamed to Claude Code
-```
-
-## Component Ownership
-
-| Component | Responsibility |
-| --- | --- |
-| `src/config.ts` | Parse and validate every environment variable. |
-| `src/services/jevService.ts` | Send noul questions to TypeSafe, enforce the timeout and question limit, and validate answers. |
-| `src/services/relevanceScorer.ts` | Ask Jev whether each tool call is still needed, in batches of 32. |
-| `src/services/contextPruner.ts` | Run the pruning pipeline: re-apply saved decisions, gate, rewrite, score, render. |
-| `src/services/decisionMemory.ts` | Remember drop, keep, and rewrite decisions; persist them across restarts. |
-| `src/services/toolPairs.ts` | Find safe tool-use/tool-result pairs and stub or rewrite them immutably. |
-| `src/services/toolRewrites.ts` | Stub superseded Reads and trim large outputs without calling Jev. |
-| `src/services/turn.ts` | Read the latest turn: new user turn, goal, slash command, last reply. |
-| `src/services/canary.ts` | Watch the main thread's response canary and handle `/jev-prune-auto` commands. |
-| `src/services/conversation.ts` | Tell the main thread from subagents by header and key each thread. |
-| `src/services/modelRouter.ts` | Decide per conversation whether to move a hard prompt to the hard model and back, and handle `/jev-route-*` commands. |
-| `src/services/savedChoice.ts` | Save a slash-command choice across restarts: canary auto-prune and the `ask` / `auto` / `off` routing choice. |
-| `src/services/noticeMemory.ts` | Add each notice back where Claude saw it, so preserved thinking keeps a byte-identical history. Saved beside the pruning state to survive a restart. |
-| `src/services/messagePreparer.ts` | Turn one `/v1/messages` request into what is sent: canary, prune and route, notices for Claude, the routed-model fallback, and the skill shadow reply hook. |
-| `src/middleware/proxy.ts` | Forward headers/body and stream upstream responses. |
-| `src/middleware/health.ts` | Report process-local readiness and counters without external calls. |
-| `src/utils/logger.ts` | Write redacted structured events to console and disk. |
-| `src/utils/recency.ts` | Bounded least-recently-used insert shared by in-memory maps. |
-| `src/index.ts` | Compose dependencies, listen locally, and shut down gracefully. |
-| `jev-prune` | Install, build, and run setup when needed, then launch. |
-| `src/setup.ts` | Save the TypeSafe key and canary choice; install slash commands. |
-| `src/launch.ts` | Start or reuse the shared proxy, then run `claude` through it. |
-| `src/sessions.ts` | Count launchers so the last one to exit stops the proxy. |
-| `src/proxyClient.ts` | Find, start, watch, and stop the shared proxy through `/health`. |
-| `src/checkout.ts`, `src/installation.ts` | Hold every checkout and `~/.claude` path the launcher scripts use. |
-| `src/services/pruneLog.ts` | Record each prune in the counters and log, and read the log back for `--stats`. |
-| `src/services/skillCatalog.ts` | Refresh an immutable catalog of eligible local skill bodies outside the request path. |
-| `src/services/skillShadow.ts` | Match catalog entries to requests and track task completion state without changing requests. |
-| `src/services/skillShadowObserver.ts` | Record metadata-only shadow observations and completion findings. |
-| `src/services/skillShadowLogFollower.ts` | Follow appended log bytes for launcher notices, including UTF-8 and file replacement state. |
-| `src/stats.ts` | Report prune totals from the log and the running proxy. |
-| `src/doctor.ts` | Check the install and explain how to fix each problem. |
-
-## Candidate Pairing Invariants
-
-A tool call is eligible only when all of these statements are true:
-
-1. An assistant array-content block has `type: "tool_use"`, a string `id`, a string `name`, and an `input` property.
-2. A user array-content block has `type: "tool_result"` and a matching string `tool_use_id`.
-3. The tool-use ID appears exactly once among valid assistant tool-use blocks.
-4. The result ID appears exactly once among valid user tool-result blocks.
-
-The blocks do not need to be in adjacent messages. Candidates are ordered by the assistant block's location. Duplicate, unmatched, and malformed blocks remain untouched.
-
-When a candidate is dropped, its result becomes a stub saying it was pruned later, when the user sent a newer message, and that every reply before then saw the full output. Its tool-use input keeps short fields, such as a path or command, and long strings become `[jev-prune] Removed.` Stub wording was tested live on real Claude Code requests. Removing the pair, a bare "removed" stub, or "removed afterwards" all led Claude to say it had never seen the output and to retract correct answers, up to 12 of 12 samples. This wording did so in 0 of 36. A result smaller than its stub is never dropped. No block or message is removed, so the history keeps its shape. Removing an emptied message could leave a mid-conversation `system` message right after an assistant turn, which the API rejects with a 400. Surrounding blocks, message properties, top-level request properties, and system content are preserved.
-
-## Protection and Scoring Policy
-
-The proxy applies protection before any content is sent to TypeSafe:
-
-- The newest `JEV_PRUNE_KEEP_RECENT` pairs are protected.
-- Tools named by `JEV_PRUNE_EXCLUDE_TOOLS` are protected.
-- Results that contain `tool_reference` blocks (tool search) are protected, because removing them would unload deferred tool definitions.
-- Previously cached drops are not scored again.
-- An older Read replaced by a later Read of the same file becomes a stub and is never scored. If the later Read is dropped, the stub is dropped too.
-- Previously kept candidates are scored again when the latest user goal changes, or after configured context growth.
-
-The current goal is the newest nonempty user text that is not a tool result. If none exists, the proxy uses the neutral fallback `Complete the current task.`
-
-Each TypeSafe request uses this shape:
-
-```json
-{
-  "model": "jev-latest",
-  "state": {
-    "current_goal": "Fix JWT validation",
-    "candidates": [
-      {
-        "key": "candidate_0",
-        "tool_use_id": "call_123",
-        "tool_name": "read_file",
-        "input": { "path": "src/auth.ts" },
-        "result": "tool output"
-      }
-    ]
-  },
-  "questions": {
-    "candidate_0": {
-      "type": "noul",
-      "instructions": "Is candidates[0] still needed to complete current_goal?",
-      "criteria": {
-        "true": "The current task depends on this tool input or result.",
-        "false": "The tool call is stale, superseded, exploratory, or unrelated to the current task."
-      }
-    }
-  }
-}
-```
-
-A response answer must be `{ "type": "noul", "noul": number }`, with the number between zero and one. Batches contain at most 32 questions.
-
-## Thresholds
-
-The estimate is:
+## Runtime paths
 
 ```text
-ceil(JSON.stringify(request).length / 4)
+Claude: jev-prune -> setup/launch -> shared detached index/createApp
+  POST /v1/messages -> canary -> prune + route concurrently on original input
+    -> replay/add notices -> model override -> edit-only thinking controls
+    -> upstream send -> optional original-model retry -> streamed response
+  /health -> local counters; other /v1 routes bypass message preparation
+
+Codex: codexLaunch -> launchCodex -> per-invocation loopback HTTP server
+  POST /responses -> supported full-history input -> replay/scoring/output stubs
+    -> upstream send -> streamed response
+  unsupported traffic -> original bytes; disconnect/shutdown -> upstream abort
+
+Shared: config -> JevService / JevRelevanceScorer
+  DecisionMemory -> versioned PruneState -> atomic JSON persistence
 ```
 
-| Estimated size | Behavior |
+Claude parses and reserializes JSON; Codex preserves original bytes unless it
+changes the parsed body. Do not transfer one transport's guarantees to the other.
+Claude uses notices, canaries, routing, mechanical rewrites and optional shadow
+observation. Codex uses output-only stubs and separate state, without those features.
+
+## Contract owners
+
+| Concern | Detailed reference |
 | --- | --- |
-| Below `JEV_PRUNE_THRESHOLD` after earlier drops | Forward without TypeSafe. |
-| Mid-task (last message is a `tool_result`) | Re-apply earlier drops only; no scoring. |
-| At/above normal threshold | Drop relevance scores below `0.50`. |
-| At/above `JEV_PRUNE_TRIGGER_TOKENS` | Drop relevance scores below `0.70`. |
+| Request preparation, thinking, retry, HTTP | [Claude pipeline](agents/claude.md) |
+| Pair safety, turn gates, replay, rewrites | [Claude pruning](agents/pruning.md) |
+| Responses envelopes, raw fallback, child lifecycle | [Codex](agents/codex.md) |
+| Configuration, scoring budgets, persistence | [Shared core](agents/shared.md) |
+| Install, process reuse, shutdown, commands | [Lifecycle](agents/lifecycle.md) |
+| Logs, streaming taps, advisory shadow | [Observability](agents/observability.md) |
+| Offline proof and coverage limits | [Testing](agents/testing.md) |
 
-The second threshold is an aggressive policy switch, not a hard output-size guarantee. Scoring only runs on a new user turn. When a prune leaves the request above `JEV_PRUNE_TARGET_TOKENS`, the proxy warns and suggests a handoff.
+Scoring failure means no new scored drops. Earlier decisions can still replay;
+Claude also retains new mechanical rewrites. Disabled pruning bypasses replay.
+New scoring occurs only after the relevant user-turn and size/trigger gates.
+Both paths preserve history structure; neither guarantees a hard context-size
+limit or demonstrated real-task pruning quality.
 
-## Failure Model
+## Maintaining the context structure
 
-| Failure | Behavior |
-| --- | --- |
-| TypeSafe timeout or network error | Forward original request. |
-| TypeSafe non-2xx response | Forward original request. |
-| Invalid TypeSafe JSON or answer shape | Forward original request. |
-| Missing candidate answer | Forward original request. |
-| Unsupported or malformed Anthropic message body | Forward unchanged. |
-| Anthropic connection failure before headers | Return local HTTP 502. |
-| Anthropic non-2xx response | Relay status, safe headers, and body. |
-| Streaming error after response headers | Terminate the downstream response. |
+This adapts [ICM](https://arxiv.org/html/2603.16021v2)'s layered context and explicit
+contracts to code navigation: root identity/routing, selected task contracts,
+and stable source-backed references. Working artifacts remain private. The paper
+addresses sequential human-reviewed workflows; its practitioner reports do not
+establish coding-agent accuracy or token savings here.
 
-A Jev error invalidates the entire prune attempt. The proxy never applies a partial set of scores from successful batches.
-
-## Header and Credential Boundaries
-
-When jev-prune changed a request (a prune, a notice, or a routed model) and the request uses adaptive or enabled thinking, the proxy adds the `thinking-binding-controls-2026-08-01` beta and `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Preserved thinking is bound to the exact history before it, so an edit invalidates every thinking block after the edit. Without this, newer accounts get a 400; with it, the API drops only the mismatched thinking. Requests jev-prune left unchanged are sent as is. With thinking disabled, the API rejects `block_binding`, so it is never added. Sending thinking made by one model to another needs no beta.
-
-The proxy removes hop-by-hop request headers, stale body-length/encoding headers, `typesafe-api-key`, and `x-typesafe-api-key` before contacting Anthropic. It preserves Claude Code's Anthropic authentication and version headers.
-
-The Jev client constructs its own request containing only:
-
-- `Authorization: Bearer <TYPESAFE_API_KEY>`
-- `Content-Type: application/json`
-- The scoring payload described above
-
-Anthropic request headers are not reused for TypeSafe calls.
-
-## Response Streaming
-
-The proxy waits only for Anthropic's response headers. It copies the upstream status and non-hop-by-hop headers, converts the web response body to a Node readable stream, and pipelines it to the downstream response. It does not buffer a full server-sent event response.
-
-When skill shadow mode is enabled, a bounded response tap also observes the final assistant reply. The shadow observer uses that reply for advisory completion scoring after the response ends. It never changes response bytes.
-
-Because native `fetch` may decompress an upstream response, stale `content-encoding` and `content-length` headers are removed before relay.
-
-## Observability
-
-Logs are written to stderr and `~/.claude/jev-prune.log`. Normal pruning events contain estimated before/after sizes, evaluated and dropped counts, duration, and safe error messages. Debug decision events add tool name, tool-use ID, relevance, cutoff, and outcome. Payload content and credentials are never logged.
-
-`GET /health` reports configuration presence, enabled state, the upstream URL without credentials, counters, and uptime. It deliberately does not call TypeSafe or Anthropic.
-
-## Verification Strategy
-
-- Configuration tests cover defaults and invalid environment values.
-- Jev client tests capture real emitted request bodies and validate response/error handling.
-- Pruner tests cover structural invariants, immutability, cutoffs, caching, and fail-open behavior.
-- Proxy tests use local HTTP upstreams for headers, bodies, errors, pass-through routes, and server-sent events.
-- Logger tests write to a temporary path.
-- A subprocess test starts the compiled server, checks health, sends SIGTERM, and requires exit code zero.
-- The optional live Jev check uses synthetic content and is excluded from the default suite.
+Task routing fits this flat, cross-cutting service layout better than loading
+all documentation or relying solely on directory rules. Keep one owner for each
+contract, update its guide with relevant source changes, and verify its links and
+suite names. Agents without automatic instruction discovery should open root
+`AGENTS.md` explicitly. `CLAUDE.md` imports that same entry point for compatibility;
+no vendor-specific copy of the guidance is maintained.

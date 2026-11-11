@@ -50,10 +50,10 @@ jev-prune --setup    # answer the setup questions again
 
 ## What happens during a session
 
-- **Automatic:** When the context reaches about 120K tokens, Jev Prune removes stale tool results the next time you send a prompt. It never prunes while Claude is in the middle of a task.
+- **Automatic:** When the context reaches about 120K tokens, Jev Prune removes stale tool results the next time you send a prompt. It makes no new pruning decisions mid-task; earlier edits still replay.
 - **Manual:** Type `/jev-prune` to prune now.
-- Recent tool results and all normal conversation text are kept.
-- If TypeSafe is slow or down, your request goes through unchanged.
+- Recent tool results are protected from scoring and trimming; superseded Reads can still be replaced. Normal conversation text is kept.
+- If TypeSafe is slow or down, no new scored drops are applied. Earlier edits and mechanical rewrites remain.
 - MCP tools still load on demand. Claude Code normally turns this off behind a proxy; `jev-prune` turns it back on (`ENABLE_TOOL_SEARCH=true`) and never prunes the results that load tools.
 
 ## Canary (optional)
@@ -83,8 +83,8 @@ Settings are in `.env` in this folder. The useful ones:
 | Setting | Default | What it does |
 | --- | --- | --- |
 | `JEV_PRUNE_THRESHOLD` | `120000` | Context size that starts automatic pruning |
-| `JEV_PRUNE_KEEP_RECENT` | `5` | Newest tool results that are never pruned |
-| `JEV_PRUNE_ENABLED` | `true` | `false` passes everything through untouched |
+| `JEV_PRUNE_KEEP_RECENT` | `5` | Newest tool results protected from scoring and trimming |
+| `JEV_PRUNE_ENABLED` | `true` | `false` disables pruning; routing and shadow have separate controls |
 | `JEV_PRUNE_SKILL_SHADOW` | `false` | Observe full skill bodies and estimate possible cleanup savings without removing them |
 | `JEV_ROUTE_DEFAULT_MODEL` | `claude-opus-5-5` | Model for easy prompts; the only model that is routed |
 | `JEV_ROUTE_HARD_MODEL` | `claude-fable-5-1` | Model for hard prompts |
@@ -114,6 +114,8 @@ rm -rf ~/.claude/commands/jev-prune*.md ~/.claude/jev-prune*
 Then delete this folder.
 
 ## More
+
+Coding agents: start with [AGENTS.md](AGENTS.md), then read only the guides matching your task.
 
 How pruning decides what to remove: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md). Run `npm run check` to lint, build, and test.
 
