@@ -23,8 +23,9 @@ JEV_PRUNE_ENABLED=false node dist/codexLaunch.js exec 'Reply hello'
 ```
 
 Disabled mode does not prune or contact TypeSafe, and proves only transport.
-The launcher reads `.env` in the current directory. It does not run the Claude
-setup wizard. Pass Codex arguments directly, including `exec`, `resume`, `-C`,
+The launcher reads `.env` in the current directory. Shared configuration validation
+also checks Claude-only settings; invalid values can prevent Codex startup.
+It does not run the Claude setup wizard. Pass Codex arguments directly, including `exec`, `resume`, `-C`,
 and `--model`. The existing `jev-prune` command still launches Claude Code.
 
 The default upstream is `https://chatgpt.com/backend-api/codex`. If your Codex
@@ -53,8 +54,8 @@ custom tool calls are eligible. New scoring happens at a user-message boundary;
 saved drops replay during tool execution and across launcher restarts. Recent
 outputs, call arguments, reasoning, instructions, tool definitions, images and
 unknown items are retained. Tool outputs and the latest user goal are sent to
-TypeSafe for relevance scoring. Kept candidates may be rescored on each new
-user turn; scoring adds latency and usage.
+TypeSafe for relevance scoring. Eligible kept candidates are rescored whenever
+a new user turn passes the scoring gates; scoring adds latency and usage.
 
 Scorer failures retain unscored output. Unsupported server-state requests
 (`previous_response_id` or `conversation`), compressed requests, malformed JSON,

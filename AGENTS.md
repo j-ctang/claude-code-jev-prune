@@ -1,63 +1,41 @@
-# AGENTS.md
+# Agent entry point
 
-## Project and commands
+Jev Prune is a TypeScript HTTP proxy with two paths: shared Claude Code
+Messages transport and per-invocation Codex Responses transport. Both use
+TypeSafe scoring. Node.js 20+; install locked dependencies with `npm ci`.
 
-jev-prune is a local TypeScript HTTP proxy for Claude Code. It calls TypeSafe
-for pruning/routing. Tests use injected responses and local HTTP servers.
+## Load context for the task
 
-- Install locked dependencies: `npm ci`.
-- Full check: `npm run check` (lint, TypeScript build, Jest).
-- Focused tests: `npm test -- --runTestsByPath test/NAME.test.ts`.
-- Required hosted check: `offline-check`; it runs with external networking blocked.
+Read only matching guides, then their named source and tests. Paths in guides
+are relative to the repository root. For cross-area work, follow every matching
+route; do not load this entire documentation tree automatically.
 
-## Before starting
+| Before doing this | Required guide |
+| --- | --- |
+| Starting implementation or dispatching work | [Workflow](docs/agents/workflow.md) |
+| Writing on GitHub, committing, reviewing a PR, or delivering | [Delivery](docs/agents/delivery.md) |
+| Running or changing verification | [Testing](docs/agents/testing.md) |
+| Investigating, editing, or reviewing Claude HTTP, thinking/history, notices, routing, canaries | [Claude pipeline](docs/agents/claude.md) |
+| Investigating, editing, or reviewing Claude pruning, pairing, rewrites | [Pruning](docs/agents/pruning.md) |
+| Investigating, editing, or reviewing Codex launch, transport, outputs | [Codex](docs/agents/codex.md) |
+| Investigating, editing, or reviewing config, scoring, persistence, shared helpers | [Shared core](docs/agents/shared.md) |
+| Investigating, editing, or reviewing installation, processes, CLI commands | [Lifecycle](docs/agents/lifecycle.md) |
+| Investigating, editing, or reviewing logs, counters, streaming taps, skill shadow | [Observability](docs/agents/observability.md) |
+| Orienting across the whole system | [Architecture](docs/ARCHITECTURE.md) |
 
-- Work only from a real user report or automated signal.
-- Claim the issue before implementation. Record model, branch, and worktree
-  in a claim comment; never work on another agent's claim.
-- Use one isolated worktree per task; preserve unrelated user changes.
-- Require a brief with GOAL, SCOPE, CONTEXT, ACCEPTANCE, VERIFY, TIMEBOX,
-  FORBIDDEN, and REPORT. Missing or empty fields block dispatch.
-- Bug fixes require a confirmed reproduction or failing test before a fix.
-- Triage with exactly one risk label before implementation. An issue template
-  does not replace triage or establish that a reported bug is reproduced.
+## Always enforce
 
-## Risk and delivery
-
-- `risk:low`: reproduced bug fixes, tests, behavior-preserving refactors,
-  lint/type debt, and dependency patches. Everything else is `risk:feature`.
-- Current coordination is by hand and sequential: human schedules and merges.
-  Neither risk label grants auto-merge authority. A specific user delegation
-  must be recorded in the issue/PR.
-- Keep one concern per PR, under approximately 300 changed lines.
-- PRs target `staging`. Run the full local check before opening a PR.
-- Fill in the PR template. State what is ready, not everything that happened.
-
-## Writing on GitHub
-
-- Keep PR descriptions and comments short. End with a clear verdict, such as
-  "Ready for review. CI passes. No blocking findings."
-- Write "All tests pass." Do not list test counts.
-- Never link material others cannot open, such as local plans or `/tmp` paths.
-- Name work by what it does, not by internal labels like "Phase 1".
-- Write in the first person ("I"). Do not name which person or agent did what.
-- Green hosted CI comes before independent review by the other model.
-  An agent must not review its own change; AI review is additional evidence.
-- Human tests staging before promotion. Main only moves by fast-forward
-  from tested staging. Check ancestry and verify equal remote SHAs afterward.
-- Revert broken staging within the hour; never fix forward. Preserve history.
-
-## Protected paths and failure handling
-
-- Do not change CI configuration, test gates (including check scripts and
-  Jest/lint configuration), authentication/credentials, or this file. Open
-  an issue instead; explicit user authorization can permit a scoped exception.
-- Never weaken, skip, or delete tests to make a check pass.
-- Ordinary PR verification uses dummy keys, injected API responses, and
-  blocked external networking. Preserve loopback for local HTTP tests.
-- Never put API/agent credentials in Actions or add a public self-hosted runner.
+- Work from a real user report or automated signal. Before implementation,
+  claim the issue, complete its brief, and apply exactly one risk label.
+- Use one isolated worktree per task; preserve unrelated changes and claims.
+- Do not change CI, test gates (including check scripts and Jest/lint config),
+  authentication/credentials, this file, or policy in the workflow, delivery,
+  and testing guides without explicit scoped user authorization. Open an issue instead.
+- Never weaken, skip, or delete tests to make a check pass. Never put API/agent
+  credentials in Actions or add a public self-hosted runner.
 - Stop after two unsuccessful correction attempts; report the blocker.
-- At quota limits, write state and next step into the task issue and resume
+- At quota limits, record state and next step in the task issue and resume
   after reset. Do not start unattended loops.
-- Report actual evidence and limitations. A passing smoke check with pruning
-  disabled does not prove live TypeSafe pruning works.
+- Human schedules and merges; neither risk label grants auto-merge authority.
+- Report actual evidence and limitations. A pruning-disabled smoke check
+  does not prove live TypeSafe pruning works.
