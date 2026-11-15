@@ -23,6 +23,9 @@ export interface ProxyDependencies {
   upstreamSignal?: AbortSignal;
 }
 
+/** Original bytes of bodies that express.json parsed, keyed by request. */
+export const rawBodies = new WeakMap<object, Buffer>();
+
 const REQUEST_HEADER_BLOCKLIST = new Set([
   "connection",
   "content-encoding",
@@ -127,13 +130,21 @@ async function forward(
   const path = request.originalUrl.split("?", 1)[0];
   const headers = requestHeaders(request);
   const canHaveBody = request.method !== "GET" && request.method !== "HEAD";
+  const rawBody = rawBodies.get(request);
   const send = (payload: unknown, beta?: string) => {
+    // Forward the original bytes unless the payload was changed.
+    const verbatim =
+      payload === body && rawBody !== undefined
+        ? rawBody
+        : Buffer.isBuffer(payload)
+          ? payload
+          : undefined;
     const serializedBody =
       canHaveBody && payload !== undefined
-        ? JSON.stringify(payload)
+        ? (verbatim ?? JSON.stringify(payload))
         : undefined;
     const outgoing = new Headers(headers);
-    if (serializedBody !== undefined) {
+    if (serializedBody !== undefined && verbatim === undefined) {
       outgoing.set("content-type", "application/json");
     }
     if (beta) addBeta(outgoing, beta);
@@ -142,7 +153,14 @@ async function forward(
       {
         method: request.method,
         headers: outgoing,
-        ...(serializedBody !== undefined ? { body: serializedBody } : {}),
+        ...(serializedBody !== undefined
+          ? {
+              body:
+                typeof serializedBody === "string"
+                  ? serializedBody
+                  : new Uint8Array(serializedBody),
+            }
+          : {}),
         ...(dependencies.upstreamSignal
           ? { signal: dependencies.upstreamSignal }
           : {}),

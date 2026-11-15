@@ -804,6 +804,87 @@ describe("Anthropic proxy", () => {
     expect(response.status).toBe(400);
     expect(upstream.requests).toHaveLength(0);
   });
+  async function rawUpstream() {
+    const seen: { headers: IncomingMessage["headers"]; body: Buffer }[] = [];
+    const server = createServer((incoming, response) => {
+      const chunks: Buffer[] = [];
+      incoming.on("data", (chunk: Buffer) => chunks.push(chunk));
+      incoming.on("end", () => {
+        seen.push({ headers: incoming.headers, body: Buffer.concat(chunks) });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end("{}");
+      });
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    openServers.push(server);
+    const url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    return { url, seen };
+  }
+  const idleScorer: RelevanceScorer = {
+    async score() {
+      return new Map();
+    },
+  };
+
+  test("forwards a non-JSON body byte-identical", async () => {
+    const upstream = await rawUpstream();
+    const app = appFor(upstream.url, idleScorer, { pruneThreshold: 1_000_000 });
+    const body = Buffer.from(
+      '--b\r\nContent-Disposition: form-data; name="file"\r\n\r\nhi\r\n--b--\r\n',
+    );
+
+    await request(await serve(app))
+      .post("/v1/files")
+      .set("content-type", "multipart/form-data; boundary=b")
+      .send(body);
+
+    expect(upstream.seen[0]?.body.equals(body)).toBe(true);
+    expect(upstream.seen[0]?.headers["content-type"]).toBe(
+      "multipart/form-data; boundary=b",
+    );
+  });
+
+  test("forwards unchanged JSON byte-identical", async () => {
+    const upstream = await rawUpstream();
+    const app = appFor(upstream.url, idleScorer, { pruneThreshold: 1_000_000 });
+    const bodies = [
+      ["/v1/messages/count_tokens", '{"big": 12345678901234567890}'],
+      [
+        "/v1/messages",
+        ' {  "model":"claude-opus-5-5",\n "messages" : [ {"role":"user","content":"hi"} ] }\n',
+      ],
+    ] as const;
+
+    for (const [path, text] of bodies) {
+      await request(await serve(app))
+        .post(path)
+        .set("content-type", "application/json")
+        .send(text);
+    }
+
+    expect(upstream.seen.map((seen) => seen.body.toString())).toEqual(
+      bodies.map(([, text]) => text),
+    );
+  });
+
+  test("serializes a changed /v1/messages body as JSON", async () => {
+    const upstream = await rawUpstream();
+    const app = appWithRouter(upstream.url, hardRouter());
+
+    await request(await serve(app))
+      .post("/v1/messages")
+      .set("content-type", "application/json; charset=utf-8")
+      .send(JSON.stringify(routedRequest, null, 2));
+
+    const seen = upstream.seen[0];
+    expect(seen?.headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(seen?.body.toString() ?? "")).toMatchObject({
+      model: "claude-fable-5-1",
+    });
+    expect(seen?.body.toString()).not.toContain("\n");
+  });
+
   test("sends the routed model and the router's notice", async () => {
     const upstream = await startUpstream((_incoming, response) => {
       response.writeHead(200, { "content-type": "application/json" });
