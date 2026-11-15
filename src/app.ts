@@ -1,7 +1,7 @@
 import express, { type Express } from "express";
 import type { Config } from "./config.js";
 import { createHealthHandler } from "./middleware/health.js";
-import { createProxyHandler } from "./middleware/proxy.js";
+import { createProxyHandler, rawBodies } from "./middleware/proxy.js";
 import { CanaryPolicy } from "./services/canary.js";
 import {
   MessagePreparer,
@@ -49,7 +49,15 @@ export function createApp(dependencies: AppDependencies): Express {
       version: dependencies.version ?? VERSION,
     }),
   );
-  app.use(express.json({ limit: "32mb" }));
+  app.use(
+    express.json({
+      limit: "32mb",
+      verify: (request, _response, buffer) => {
+        rawBodies.set(request, buffer);
+      },
+    }),
+  );
+  app.use(express.raw({ type: () => true, limit: "32mb" }));
   app.use(
     "/v1",
     createProxyHandler({

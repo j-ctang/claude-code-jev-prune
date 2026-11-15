@@ -22,8 +22,9 @@ Shared: config -> JevService / JevRelevanceScorer
   DecisionMemory -> versioned PruneState -> atomic JSON persistence
 ```
 
-Claude parses and reserializes JSON; Codex preserves original bytes unless it
-changes the parsed body. Do not transfer one transport's guarantees to the other.
+Claude and Codex both preserve original request bytes unless the body changes;
+a changed Claude body is reserialized as JSON. Do not transfer one transport's
+guarantees to the other.
 Claude uses notices, canaries, routing, mechanical rewrites and optional shadow
 observation. Codex uses output-only stubs and separate state, without those features.
 
