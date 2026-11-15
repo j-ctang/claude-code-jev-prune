@@ -23,11 +23,10 @@ export interface ProxyDependencies {
   upstreamSignal?: AbortSignal;
 }
 
-const REQUEST_HEADER_BLOCKLIST = new Set([
+const HOP_BY_HOP_HEADERS = [
   "connection",
   "content-encoding",
   "content-length",
-  "host",
   "keep-alive",
   "proxy-authenticate",
   "proxy-authorization",
@@ -35,24 +34,17 @@ const REQUEST_HEADER_BLOCKLIST = new Set([
   "te",
   "trailer",
   "transfer-encoding",
-  "typesafe-api-key",
   "upgrade",
+];
+
+const REQUEST_HEADER_BLOCKLIST = new Set([
+  ...HOP_BY_HOP_HEADERS,
+  "host",
+  "typesafe-api-key",
   "x-typesafe-api-key",
 ]);
 
-const RESPONSE_HEADER_BLOCKLIST = new Set([
-  "connection",
-  "content-encoding",
-  "content-length",
-  "keep-alive",
-  "proxy-authenticate",
-  "proxy-authorization",
-  "proxy-connection",
-  "te",
-  "trailer",
-  "transfer-encoding",
-  "upgrade",
-]);
+const RESPONSE_HEADER_BLOCKLIST = new Set(HOP_BY_HOP_HEADERS);
 
 function isAnthropicRequest(value: unknown): value is AnthropicRequest {
   return (

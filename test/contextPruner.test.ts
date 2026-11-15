@@ -23,6 +23,8 @@ import {
 function config(overrides: Partial<Config> = {}): Config {
   return {
     port: 5590,
+    canaryPrefix: "",
+    canaryAction: "notice",
     pruningEnabled: true,
     pruneThreshold: 0,
     triggerTokens: 1_000_000,

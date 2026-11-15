@@ -3,8 +3,7 @@ import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig, parsePort, withoutCredentials } from "./config.js";
 import { loadInstallEnv, localProxyClient } from "./checkout.js";
-import { sessionsDirectory } from "./installation.js";
-import { logPath } from "./installation.js";
+import { logPath, sessionsDirectory } from "./installation.js";
 import { skillShadowNotices } from "./services/skillShadowLog.js";
 import { createSkillShadowLogFollower } from "./services/skillShadowLogFollower.js";
 import { assertSkillShadowMode, formatTokens } from "./proxyClient.js";
@@ -68,6 +67,8 @@ async function main(): Promise<void> {
         poll();
       };
     }
+    // Probe again now that this launcher is registered: the last other
+    // launcher may have stopped the proxy since the first probe.
     const running = await proxy.probe();
     if (running) assertSkillShadowMode(running, config.skillShadow);
     if (running && proxy.isOutdated(running)) {

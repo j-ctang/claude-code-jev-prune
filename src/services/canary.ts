@@ -73,7 +73,7 @@ export class CanaryPolicy {
     config: Pick<Config, "canaryPrefix" | "canaryAction" | "statePath">,
     private readonly logger: AppLogger,
   ) {
-    this.monitor = new CanaryMonitor(config.canaryPrefix ?? "");
+    this.monitor = new CanaryMonitor(config.canaryPrefix);
     this.autoPrune = canaryAutoPrune(
       config.statePath,
       config.canaryAction === "prune",

@@ -31,40 +31,29 @@ function stringArray(value: unknown): string[] {
     : [];
 }
 
-function tokenEntries(value: unknown): Array<[string, number]> {
+function entries<V>(
+  value: unknown,
+  isValue: (item: unknown) => item is V,
+): Array<[string, V]> {
   if (!Array.isArray(value)) return [];
   return value.filter(
-    (entry): entry is [string, number] =>
-      Array.isArray(entry) &&
-      typeof entry[0] === "string" &&
-      typeof entry[1] === "number" &&
-      Number.isFinite(entry[1]),
+    (entry): entry is [string, V] =>
+      Array.isArray(entry) && typeof entry[0] === "string" && isValue(entry[1]),
   );
 }
 
-function goalEntries(value: unknown): Array<[string, string]> {
-  if (!Array.isArray(value)) return [];
-  return value.filter(
-    (entry): entry is [string, string] =>
-      Array.isArray(entry) &&
-      typeof entry[0] === "string" &&
-      typeof entry[1] === "string",
-  );
-}
+const isFiniteNumber = (item: unknown): item is number =>
+  typeof item === "number" && Number.isFinite(item);
 
-function rewriteEntries(value: unknown): Array<[string, Rewrite]> {
-  if (!Array.isArray(value)) return [];
-  return value.filter((entry): entry is [string, Rewrite] => {
-    if (!Array.isArray(entry) || typeof entry[0] !== "string") return false;
-    const rewrite = entry[1] as Record<string, unknown> | null;
-    if (typeof rewrite !== "object" || rewrite === null) return false;
-    return (
-      (rewrite.kind === "stub" && typeof rewrite.text === "string") ||
-      (rewrite.kind === "trim" &&
-        typeof rewrite.keepTokens === "number" &&
-        Number.isFinite(rewrite.keepTokens))
-    );
-  });
+const isString = (item: unknown): item is string => typeof item === "string";
+
+function isRewrite(item: unknown): item is Rewrite {
+  if (typeof item !== "object" || item === null) return false;
+  const rewrite = item as Record<string, unknown>;
+  return (
+    (rewrite.kind === "stub" && typeof rewrite.text === "string") ||
+    (rewrite.kind === "trim" && isFiniteNumber(rewrite.keepTokens))
+  );
 }
 
 export function createFileStateStore(path: string): PruneStateStore {
@@ -77,9 +66,9 @@ export function createFileStateStore(path: string): PruneStateStore {
       return {
         drops: stringArray(saved.drops),
         keeps: stringArray(saved.keeps),
-        rewrites: rewriteEntries(saved.rewrites),
-        lastFullScoreTokens: tokenEntries(saved.lastFullScoreTokens),
-        lastScoredGoals: goalEntries(saved.lastScoredGoals),
+        rewrites: entries(saved.rewrites, isRewrite),
+        lastFullScoreTokens: entries(saved.lastFullScoreTokens, isFiniteNumber),
+        lastScoredGoals: entries(saved.lastScoredGoals, isString),
         seenSessions: stringArray(saved.seenSessions),
       };
     },
