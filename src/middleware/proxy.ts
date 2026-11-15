@@ -23,9 +23,6 @@ export interface ProxyDependencies {
   upstreamSignal?: AbortSignal;
 }
 
-/** Original bytes of bodies that express.json parsed, keyed by request. */
-export const rawBodies = new WeakMap<object, Buffer>();
-
 const REQUEST_HEADER_BLOCKLIST = new Set([
   "connection",
   "content-encoding",
@@ -56,6 +53,9 @@ const RESPONSE_HEADER_BLOCKLIST = new Set([
   "transfer-encoding",
   "upgrade",
 ]);
+
+/** Original bytes of bodies that express.json parsed, keyed by request. */
+export const rawBodies = new WeakMap<object, Buffer>();
 
 function isAnthropicRequest(value: unknown): value is AnthropicRequest {
   return (
