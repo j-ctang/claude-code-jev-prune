@@ -67,7 +67,10 @@ async function main(): Promise<void> {
         poll();
       };
     }
-    const running = existing;
+    // Probe again now that this launcher is registered: the last other
+    // launcher may have stopped the proxy since the first probe.
+    const running = await proxy.probe();
+    if (running) assertSkillShadowMode(running, config.skillShadow);
     if (running && proxy.isOutdated(running)) {
       process.stderr.write(
         "Jev Prune was updated. Close all jev-prune sessions to load the new version.\n",
