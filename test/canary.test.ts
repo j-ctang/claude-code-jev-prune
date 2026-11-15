@@ -79,7 +79,10 @@ test("subagent replies never count as canary misses", async () => {
     error: () => undefined,
     debug: () => undefined,
   };
-  const policy = new CanaryPolicy({ canaryPrefix: "OK:", statePath }, logger);
+  const policy = new CanaryPolicy(
+    { canaryPrefix: "OK:", canaryAction: "notice", statePath },
+    logger,
+  );
   const main = identifyConversation(turn("x"), "s");
   const subagent = identifyConversation(turn("x"), "s", "a1");
 

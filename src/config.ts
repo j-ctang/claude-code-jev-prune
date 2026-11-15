@@ -45,8 +45,8 @@ export interface Config {
   trimKeepTokens: number;
   notify: boolean;
   skillShadow: boolean;
-  canaryPrefix?: string;
-  canaryAction?: "notice" | "prune";
+  canaryPrefix: string;
+  canaryAction: "notice" | "prune";
   keepRecent: number;
   excludeTools: ReadonlySet<string>;
   debug: boolean;

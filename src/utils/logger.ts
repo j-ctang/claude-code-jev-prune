@@ -31,12 +31,10 @@ export function createLogger(options: LoggerOptions = {}): winston.Logger {
     transports.push(
       new winston.transports.Console({
         format:
-          process.env.NODE_ENV === "production"
-            ? winston.format.json()
-            : winston.format.combine(
-                winston.format.colorize(),
-                winston.format.simple(),
-              ),
+          winston.format.combine(
+            winston.format.colorize(),
+            winston.format.simple(),
+          ),
       }),
     );
   }

@@ -3,8 +3,7 @@ import { statSync } from "node:fs";
 import { resolve } from "node:path";
 import { loadConfig, parsePort, withoutCredentials } from "./config.js";
 import { loadInstallEnv, localProxyClient } from "./checkout.js";
-import { sessionsDirectory } from "./installation.js";
-import { logPath } from "./installation.js";
+import { logPath, sessionsDirectory } from "./installation.js";
 import { skillShadowNotices } from "./services/skillShadowLog.js";
 import { createSkillShadowLogFollower } from "./services/skillShadowLogFollower.js";
 import { assertSkillShadowMode, formatTokens } from "./proxyClient.js";
@@ -68,8 +67,7 @@ async function main(): Promise<void> {
         poll();
       };
     }
-    const running = await proxy.probe();
-    if (running) assertSkillShadowMode(running, config.skillShadow);
+    const running = existing;
     if (running && proxy.isOutdated(running)) {
       process.stderr.write(
         "Jev Prune was updated. Close all jev-prune sessions to load the new version.\n",
